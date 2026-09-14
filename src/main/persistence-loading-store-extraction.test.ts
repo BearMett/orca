@@ -38,7 +38,7 @@ vi.mock('electron', () => ({
 vi.mock('./telemetry/client', () => ({ track: trackMock }))
 vi.mock('./telemetry/cohort-classifier', () => ({ getCohortAtEmit: getCohortAtEmitMock }))
 vi.mock('./ssh/ssh-config-parser', () => ({
-  loadUserSshConfig: vi.fn(() => ({ hosts: [] })),
+  loadUserSshConfig: vi.fn(() => ({ hosts: [], skippedIncludes: [] })),
   sshConfigHostsToTargets: vi.fn(() => [])
 }))
 vi.mock('./startup/startup-diagnostics', async (importOriginal) => {
