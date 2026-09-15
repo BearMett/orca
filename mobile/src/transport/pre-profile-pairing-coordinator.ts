@@ -8,7 +8,7 @@ import {
 import { connect, type ConnectOptions } from './rpc-client'
 import { resolvePairingHostIdentity, saveHost } from './host-store'
 import type { HostProfile, PairingOffer } from './types'
-import { isMethodNotFoundRefusal } from './rpc-acceptance-policies'
+import { isPairingRelayRpcUnavailable } from './pairing-relay-rpc-unavailable'
 import {
   relayCredentialProvision,
   relayPairingEndpointsRead
@@ -224,7 +224,7 @@ async function runPairing(
     reqId: journal.metadata.installReqId,
     newResumeTokenHash: journal.metadata.pendingResumeTokenHash
   })
-  if (isMethodNotFoundRefusal(provision)) {
+  if (isPairingRelayRpcUnavailable(provision)) {
     if (winner.path !== 'direct') {
       throw new Error('relay pairing RPC unavailable after relay path authentication')
     }
