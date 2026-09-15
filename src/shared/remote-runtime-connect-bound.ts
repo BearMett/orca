@@ -23,6 +23,7 @@ export function remoteRuntimeConnectOptions<TOptions extends ClientOptions>(
   connectTimeoutMs: number = REMOTE_RUNTIME_CONNECT_TIMEOUT_MS
 ): TOptions & { handshakeTimeout: number } {
   return {
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the empty default stands in for an absent TOptions; every property it could carry is optional, and the spread below is the only use.
     ...(options ?? ({} as TOptions)),
     handshakeTimeout: connectTimeoutMs
   }

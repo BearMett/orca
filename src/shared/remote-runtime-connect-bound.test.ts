@@ -106,9 +106,9 @@ describe('remote runtime connect bound', () => {
     expect(scannedConstructions).toBeGreaterThan(0)
     // Guards the relay site specifically: an allowlist that quietly stopped
     // resolving a path would still satisfy the count above.
-    expect(
-      coveredSocketSources().some((path) => path.endsWith(RELAY_CONTROL_SOCKET_FACTORY))
-    ).toBe(true)
+    expect(coveredSocketSources().some((path) => path.endsWith(RELAY_CONTROL_SOCKET_FACTORY))).toBe(
+      true
+    )
   })
 
   it('reports an unanswered host as unreachable rather than as an empty result', async () => {
@@ -136,6 +136,7 @@ describe('remote runtime connect bound', () => {
     })
 
     // The bounded path was taken: a connect failure, not a silent empty answer.
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: vi mock call args are untyped; this subscription's onError is only ever invoked with a RemoteRuntimeClientError.
     const error = onError.mock.calls[0][1] as RemoteRuntimeClientError
     expect(error.code).toBe('remote_runtime_unavailable')
     expect(error.message).toContain(endpoint)

@@ -72,6 +72,7 @@ describe('relay control connect transport bound', () => {
 
     const error = await client.connect().then(
       () => null,
+      // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: connect() only ever rejects with an Error, and the assertion below re-proves it before the message is read.
       (reason: unknown) => reason as Error
     )
 
