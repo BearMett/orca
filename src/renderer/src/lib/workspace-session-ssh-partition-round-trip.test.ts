@@ -178,10 +178,24 @@ describe('ssh host partition workspaces with no terminal tabs', () => {
         activeFileIdByWorktree: { [WORKTREE_ID]: '/remote/checkout/feature/src/main.ts' },
         activeTabTypeByWorktree: { [WORKTREE_ID]: 'editor' },
         browserTabsByWorktree: {
-          [WORKTREE_ID]: [{ id: 'browser-1', name: 'Docs', tabs: [], activeTabId: null }]
+          [WORKTREE_ID]: [
+            {
+              id: 'browser-1',
+              worktreeId: WORKTREE_ID,
+              label: 'Docs',
+              url: 'https://docs.example',
+              title: 'Docs',
+              loading: false,
+              faviconUrl: null,
+              canGoBack: false,
+              canGoForward: false,
+              loadError: null,
+              createdAt: 1
+            }
+          ]
         },
         lastVisitedAtByWorktreeId: { [`${SSH_HOST_ID}|${WORKTREE_ID}`]: 4242 }
-      } as unknown as WorkspaceSessionState)
+      })
     }
   }
 
@@ -239,7 +253,7 @@ describe('ssh host partition workspaces with no terminal tabs', () => {
             }
           ]
         }
-      } as unknown as WorkspaceSessionState)
+      })
     }
 
     const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), repos)
@@ -277,11 +291,11 @@ describe('ssh host partition rows the host has nothing for', () => {
         tabsByWorktree: {},
         openFilesByWorktree: { [WORKTREE_ID]: [draftFile] },
         activeTabTypeByWorktree: { [WORKTREE_ID]: 'editor' }
-      } as unknown as WorkspaceSessionState),
+      }),
       [SSH_HOST_ID]: session({
         tabsByWorktree: { [WORKTREE_ID]: [] },
         ...(hostOpenFiles ? { openFilesByWorktree: { [WORKTREE_ID]: [] } } : {})
-      } as unknown as WorkspaceSessionState)
+      })
     }
   }
 
@@ -290,7 +304,7 @@ describe('ssh host partition rows the host has nothing for', () => {
     // the bug the adoption exists to fix: RemoteWorkspaceSession carries terminal fields only, so
     // nothing can recover a `dirtyDraftContent` once the read has dropped it.
     const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(emptyHostRowsOverBaseDraft(true) as never),
+      partitionedApi(emptyHostRowsOverBaseDraft(true)),
       repos
     )
 
@@ -315,12 +329,9 @@ describe('ssh host partition rows the host has nothing for', () => {
           }
         ]
       }
-    } as unknown as WorkspaceSessionState)
+    })
 
-    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(partitions as never),
-      repos
-    )
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), repos)
 
     expect(
       read.session.openFilesByWorktree?.[WORKTREE_ID]?.map((file) => file.relativePath)
@@ -336,16 +347,28 @@ describe('ssh host partition rows the host has nothing for', () => {
       [SSH_HOST_ID]: session({
         tabsByWorktree: {},
         unifiedTabs: {
-          [WORKTREE_ID]: [{ id: 'tab-unified', type: 'terminal', worktreeId: WORKTREE_ID }]
+          [WORKTREE_ID]: [
+            {
+              id: 'tab-unified',
+              entityId: 'tab-unified',
+              groupId: 'group-1',
+              worktreeId: WORKTREE_ID,
+              contentType: 'terminal',
+              label: 'tab-unified',
+              customLabel: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: 1
+            }
+          ]
         },
-        terminalLayoutsByTabId: { 'tab-unified': { direction: 'row', panes: [] } }
-      } as unknown as WorkspaceSessionState)
+        terminalLayoutsByTabId: {
+          'tab-unified': { root: null, activeLeafId: null, expandedLeafId: null }
+        }
+      })
     }
 
-    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(partitions as never),
-      repos
-    )
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), repos)
 
     expect(read.session.terminalLayoutsByTabId?.['tab-unified']).toBeDefined()
   })
@@ -379,11 +402,11 @@ describe('ssh host partition adoption on a contested bare id', () => {
             }
           ]
         }
-      } as unknown as WorkspaceSessionState),
+      }),
       [RUNTIME_HOST_ID]: session({
         tabsByWorktree: { [WORKTREE_ID]: [] },
         activeTabTypeByWorktree: { [WORKTREE_ID]: 'terminal' }
-      } as unknown as WorkspaceSessionState),
+      }),
       [SSH_HOST_ID]: session({
         tabsByWorktree: {},
         openFilesByWorktree: {
@@ -396,7 +419,7 @@ describe('ssh host partition adoption on a contested bare id', () => {
             }
           ]
         }
-      } as unknown as WorkspaceSessionState)
+      })
     }
   }
 
@@ -405,7 +428,7 @@ describe('ssh host partition adoption on a contested bare id', () => {
     // whatever survives here back into local's own partition. Replacing local's rows with the SSH
     // workspace's would persist one workspace's editor state as another's — and destroy the draft.
     const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(contestedPartitions() as never),
+      partitionedApi(contestedPartitions()),
       contestedRepos
     )
 
@@ -420,10 +443,10 @@ describe('ssh host partition adoption on a contested bare id', () => {
     partitions[SSH_HOST_ID] = session({
       ...partitions[SSH_HOST_ID],
       activeFileIdByWorktree: { [WORKTREE_ID]: '/remote/checkout/feature/src/other.ts' }
-    } as unknown as WorkspaceSessionState)
+    })
 
     const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(partitions as never),
+      partitionedApi(partitions),
       contestedRepos
     )
 
@@ -440,17 +463,14 @@ describe('ssh host partition adoption on a contested bare id', () => {
       local: session({
         tabsByWorktree: {},
         lastVisitedAtByWorktreeId: { [WORKTREE_ID]: 1000 }
-      } as unknown as WorkspaceSessionState),
+      }),
       [SSH_HOST_ID]: session({
         tabsByWorktree: { [WORKTREE_ID]: [] },
         lastVisitedAtByWorktreeId: { [WORKTREE_ID]: 9999 }
-      } as unknown as WorkspaceSessionState)
+      })
     }
 
-    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(partitions as never),
-      repos
-    )
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), repos)
 
     expect(read.session.lastVisitedAtByWorktreeId?.[WORKTREE_ID]).toBe(1000)
   })
@@ -461,12 +481,12 @@ describe('ssh host partition adoption on a contested bare id', () => {
         local: session({
           tabsByWorktree: {},
           lastVisitedAtByWorktreeId: { [WORKTREE_ID]: 1000 }
-        } as unknown as WorkspaceSessionState),
+        }),
         [SSH_HOST_ID]: session({
           tabsByWorktree: { [WORKTREE_ID]: [] },
           lastVisitedAtByWorktreeId: { [`${SSH_HOST_ID}|${WORKTREE_ID}`]: 9999 }
-        } as unknown as WorkspaceSessionState)
-      } as never),
+        })
+      }),
       repos
     )
 
@@ -490,10 +510,7 @@ describe('ssh host partition write/read round trip', () => {
     for (const snapshot of snapshots) {
       partitions[snapshot.hostId ?? 'local'] = snapshot.state
     }
-    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(partitions as never),
-      repos
-    )
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), repos)
     return read.session
   }
 
@@ -513,7 +530,7 @@ describe('ssh host partition write/read round trip', () => {
           ]
         },
         activeTabTypeByWorktree: { [WORKTREE_ID]: 'editor' }
-      } as unknown as WorkspaceSessionState)
+      })
     )
 
     expect(restored.openFilesByWorktree?.[WORKTREE_ID]?.[0]?.dirtyDraftContent).toBe(
@@ -553,10 +570,7 @@ describe('ssh host partition and the closed-last-terminal tombstone', () => {
     for (const snapshot of snapshots) {
       partitions[snapshot.hostId ?? 'local'] = snapshot.state
     }
-    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(partitions as never),
-      repos
-    )
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), repos)
     return { restored: read.session, partitions }
   }
 
@@ -600,10 +614,7 @@ describe('ssh host partition and the closed-last-terminal tombstone', () => {
       local: session({ tabsByWorktree: {} }),
       [SSH_HOST_ID]: session({ tabsByWorktree: { [WORKTREE_ID]: [] } })
     }
-    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
-      partitionedApi(partitions as never),
-      repos
-    )
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), repos)
 
     expect(read.session.tabsByWorktree[WORKTREE_ID]).toEqual([])
     expect(Object.hasOwn(read.session.tabsByWorktree, WORKTREE_ID)).toBe(true)
@@ -619,7 +630,7 @@ describe('ssh host partition and the closed-last-terminal tombstone', () => {
       partitionedApi({
         local: session({ tabsByWorktree: { [WORKTREE_ID]: [] } }),
         [SSH_HOST_ID]: session({ tabsByWorktree: { [WORKTREE_ID]: [tab('tab-stale')] } })
-      } as never),
+      }),
       repos
     )
     expect(firstBoot.session.tabsByWorktree[WORKTREE_ID]?.map((entry) => entry.id)).toEqual([

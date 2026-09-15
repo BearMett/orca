@@ -51,12 +51,17 @@ import {
 
 type KeyedRecord = Record<string, unknown>
 
+// oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Object.keys over the ownership table yields exactly the session field names it is keyed by.
 const SESSION_FIELDS = Object.keys(
   WORKSPACE_SESSION_FIELD_OWNERSHIP
 ) as (keyof WorkspaceSessionState)[]
 
+function isRecord(value: unknown): value is KeyedRecord {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
 function asRecord(value: unknown): KeyedRecord | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as KeyedRecord) : null
+  return isRecord(value) ? value : null
 }
 
 function recordWorkspaceId(entry: unknown): string | null {
@@ -66,7 +71,7 @@ function recordWorkspaceId(entry: unknown): string | null {
 
 /** A browser-workspace row is keyed by browser workspace id; its pages name the workspace. */
 function browserPagesWorkspaceId(entry: unknown): string | null {
-  const first = Array.isArray(entry) ? (entry[0] as unknown) : null
+  const first: unknown = Array.isArray(entry) ? entry[0] : null
   return recordWorkspaceId(first)
 }
 
@@ -114,6 +119,7 @@ function adoptableWorkspaceIds(
         }
         break
       case 'worktreeArray':
+        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: worktreeArray fields hold worktree ids; the ownership table is what says so, not the value's static type.
         for (const id of Array.isArray(value) ? (value as string[]) : []) {
           consider(id)
         }
@@ -150,7 +156,7 @@ function hostHasNothingFor(entry: unknown): boolean {
   if (Array.isArray(entry)) {
     return entry.length === 0
   }
-  return typeof entry === 'object' && Object.keys(entry as KeyedRecord).length === 0
+  return isRecord(entry) && Object.keys(entry).length === 0
 }
 
 function adoptRecord(
@@ -175,6 +181,7 @@ function adoptRecord(
       merged[key] = entry
     }
   }
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the merged record is written back through a dynamic field key, which the session type cannot express.
   ;(next as KeyedRecord)[field] = merged
 }
 
@@ -251,10 +258,13 @@ export function adoptStrandedHostPartitionSession(
         break
       case 'worktreeArray': {
         const hostIds = host[field]
+        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: worktreeArray fields hold worktree ids; the session type does not carry that through a dynamic key.
         const adopted = (Array.isArray(hostIds) ? (hostIds as string[]) : []).filter(adopts)
         if (adopted.length > 0) {
           const baseIds = next[field]
+          // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the adopted union is written back through a dynamic field key, which the session type cannot express.
           ;(next as KeyedRecord)[field] = [
+            // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: worktreeArray fields hold worktree ids; the session type does not carry that through a dynamic key.
             ...new Set([...(Array.isArray(baseIds) ? (baseIds as string[]) : []), ...adopted])
           ]
         }

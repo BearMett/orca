@@ -53,6 +53,7 @@ export function mergeWorkspaceSessionRecordField(
   if (!isWorkspaceSessionRecord(value)) {
     return
   }
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the record field is created here, so it holds exactly what this merge assigns into it.
   const target = (out[field] ??= {}) as WorkspaceSessionRecord
   Object.assign(target, value)
 }
@@ -66,6 +67,7 @@ export function mergeWorkspaceSessionArrayField(
   if (!Array.isArray(value)) {
     return
   }
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the array field is created here, so it holds exactly what this merge pushes into it.
   const target = (out[field] ??= []) as unknown[]
   target.push(...value)
 }

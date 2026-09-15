@@ -175,6 +175,7 @@ describe('splitWorkspaceSessionByHost', () => {
       'a-wt': 2,
       'runtime:env-a|a-wt': 4
     })
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the literal is a well-formed ssh: host id; ExecutionHostId is a template-literal type a plain string cannot satisfy.
     expect(slices['ssh:builder' as ExecutionHostId]?.lastVisitedAtByWorktreeId).toEqual({
       'ssh:builder|ssh-wt': 3
     })

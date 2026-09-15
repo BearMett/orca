@@ -88,6 +88,7 @@ const target = sshTarget(TARGET_ID, 'one.example.com')
 const otherTarget = sshTarget(OTHER_TARGET_ID, 'two.example.com')
 
 function remoteRepo(id: string, path: string, connectionId: string): Repo {
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the literal names every Repo field this export suite reads.
   return { id, path, displayName: id, badgeColor: 'blue', addedAt: 1, connectionId } as Repo
 }
 
@@ -143,6 +144,7 @@ beforeEach(() => {
             if (method === 'workspace.get') {
               return Promise.resolve(hostSnapshot)
             }
+            // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: params.patch crosses the IPC boundary as unknown; this suite only ever sends a session patch.
             const patch = params.patch as { session: RemoteWorkspaceSession }
             hostSnapshot = {
               ...hostSnapshot,
@@ -198,6 +200,7 @@ async function publishToConnectedTarget(store: InstanceType<typeof Store>): Prom
   if (!get || !set) {
     throw new Error('remote workspace handlers were never registered')
   }
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the remote-workspace get handler answers with this revision/token pair; the IPC return type is unknown.
   const observed = (await get(null, { targetId: TARGET_ID })) as {
     revision: number
     hostObservationToken: string
