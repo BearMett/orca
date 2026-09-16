@@ -209,6 +209,47 @@ function adoptRecord(
   ;(next as KeyedRecord)[field] = merged
 }
 
+/**
+ * The worktree-keyed rows a partition holds for workspaces the write will not route back to it.
+ *
+ * Parked rather than dropped. A partition write replaces each field with exactly what the unified
+ * session routed there, so a row this read left out — declined as residue, withheld as contested,
+ * or skipped because the base already holds the live copy — is erased the moment any sibling
+ * workspace writes the same partition. `attachHostSessionShadow` puts these back into the slice
+ * first, which is the protection a contested runtime co-claimant already gets. Declining to show a
+ * row must never mean deleting it: docs/reference/ssh-execution-boundary.md makes leak, never kill,
+ * the safe direction, and a row no partition holds at all is unrecoverable.
+ */
+export function partitionRowsTheWriteWontReturn(
+  host: WorkspaceSessionState,
+  adoptedWorkspaceIds: ReadonlySet<string>
+): WorkspaceSessionState | null {
+  let parked: KeyedRecord | null = null
+  for (const field of SESSION_FIELDS) {
+    if (WORKSPACE_SESSION_FIELD_OWNERSHIP[field] !== 'worktreeKeyed') {
+      continue
+    }
+    const record = asRecord(host[field])
+    if (!record) {
+      continue
+    }
+    let kept: KeyedRecord | null = null
+    for (const [key, entry] of Object.entries(record)) {
+      if (adoptedWorkspaceIds.has(normalizeWorkspaceSessionKeyToWorkspaceId(key))) {
+        continue
+      }
+      kept ??= {}
+      kept[key] = entry
+    }
+    if (kept) {
+      parked ??= {}
+      parked[field] = kept
+    }
+  }
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: every key written here is a session field name taken from the ownership table, and every value is that field's own record copied by reference.
+  return parked as WorkspaceSessionState | null
+}
+
 export type StrandedPartitionAdoptionOptions = {
   /** Session keys the read found claimed by more than one partition. */
   contestedSessionKeys?: ReadonlySet<string>
@@ -258,8 +299,11 @@ export function adoptStrandedHostPartitionSession(
     if (!adopts(key) || !Array.isArray(tabs)) {
       continue
     }
-    // A contested id is not this workspace written twice, so the base's own row stays.
-    if (!isContested(key) || !Object.hasOwn(next.tabsByWorktree, key)) {
+    // A contested id is not this workspace written twice, so the base's own row stays — but an
+    // EMPTY base row is not a row, it is the gap this repair exists to fill. Reading `hasOwn` as
+    // "the base has tabs here" is what let #12721's empty local list win over the host's real one
+    // whenever the id happened to be contested.
+    if (!isContested(key) || hostHasNothingFor(next.tabsByWorktree[key])) {
       next.tabsByWorktree[key] = tabs
     }
   }

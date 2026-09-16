@@ -259,6 +259,53 @@ describe('a bare workspace id two partitions both hold', () => {
     expect(read.contestedPrimaryHostBySessionKey?.[WORKTREE_ID]).toBeUndefined()
   })
 
+  it('keeps a declined row in its own partition when a sibling workspace is written', async () => {
+    const SIBLING_ID = 'repo-sibling::/checkout'
+    const partitions = {
+      local: session({}),
+      [SSH_HOST_ID]: session({
+        tabsByWorktree: {
+          // Contested and held by no other partition, so the read declines it...
+          [WORKTREE_ID]: [tab('tab-declined', WORKTREE_ID)],
+          // ...while this sibling is adopted and routes back to the same partition.
+          [SIBLING_ID]: [tab('tab-sibling', SIBLING_ID)]
+        }
+      }),
+      [OTHER_SSH_HOST_ID]: session({
+        tabsByWorktree: { [WORKTREE_ID]: [tab('tab-rival', WORKTREE_ID)] }
+      })
+    }
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(partitionedApi(partitions), [
+      { id: 'repo-sibling', connectionId: TARGET_ID, executionHostId: SSH_HOST_ID }
+    ])
+    expect(read.session.tabsByWorktree[WORKTREE_ID]).toBeUndefined()
+
+    const patches: { hostId: ExecutionHostId | undefined; patch: WorkspaceSessionPatch }[] = []
+    await patchWorkspaceSessionByHost(
+      {
+        get: async () => getDefaultWorkspaceSession(),
+        patch: async (patch, hostId) => {
+          patches.push({ hostId, patch })
+        },
+        setSync: () => {}
+      },
+      { tabsByWorktree: read.session.tabsByWorktree },
+      {
+        repos: [{ id: 'repo-sibling', connectionId: TARGET_ID, executionHostId: SSH_HOST_ID }],
+        worktreesByRepo: {},
+        contestedHostWorkspaceSessions: read.contestedHostWorkspaceSessions,
+        contestedPrimaryHostBySessionKey: read.contestedPrimaryHostBySessionKey
+      }
+    )
+
+    // Main applies a patch field-wise, so an `ssh:<targetId>` write carrying only the sibling would
+    // erase the declined row from the one partition that still holds it. Declining to show a row
+    // must never mean deleting it.
+    const sshTabs = patches.find((entry) => entry.hostId === SSH_HOST_ID)?.patch.tabsByWorktree
+    expect(Object.keys(sshTabs ?? {}).sort()).toEqual([SIBLING_ID, WORKTREE_ID].sort())
+    expect(sshTabs?.[WORKTREE_ID]?.map((entry) => entry.id)).toEqual(['tab-declined'])
+  })
+
   it('does not adopt a partition the catalog says does not own the workspace', async () => {
     const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
       partitionedApi({

@@ -14,6 +14,7 @@ import {
 } from '../../../shared/worktree-execution-host-resolution'
 import {
   adoptStrandedHostPartitionSession,
+  partitionRowsTheWriteWontReturn,
   workspaceIdsNamedByPartition
 } from '../../../shared/workspace-session-stranded-partition-adoption'
 import {
@@ -214,6 +215,10 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
     merged.contestedSessionKeys
   )
   const primaryHostBySessionKey = { ...merged.primaryHostBySessionKey }
+  // Why the ssh partitions get shadow entries of their own: the contention split only parks rows
+  // for the slices it arbitrates, and these are not among them. Everything this read leaves behind
+  // in an ssh partition still has to survive the next write to it.
+  const shadow: HostSessionSlices = { ...merged.shadow }
   for (const [hostId, slice] of sshPartitions) {
     const adoption = adoptStrandedHostPartitionSession(session, slice, {
       contestedSessionKeys: attribution.contestedSessionKeys,
@@ -224,6 +229,12 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
       )
     })
     session = adoption.session
+    if (slice) {
+      const parked = partitionRowsTheWriteWontReturn(slice, adoption.adoptedWorkspaceIds)
+      if (parked) {
+        shadow[hostId] = parked
+      }
+    }
     for (const workspaceId of adoption.adoptedWorkspaceIds) {
       // Why this overrides the merge's answer: the merge saw only the leftover half in 'local' and
       // named it the owner. These rows came out of the partition that owns them, and routing has to
@@ -237,7 +248,7 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
     // Why the merged slices and not the raw ones: a row parked out of the renderer session must not
     // still name its host as the owner, or startup builds runtime placeholders for a local row.
     runtimeHostIdByWorkspaceSessionKey: buildRuntimeHostIdByWorkspaceSessionKey(merged.slices),
-    contestedHostWorkspaceSessions: merged.shadow,
+    contestedHostWorkspaceSessions: shadow,
     contestedPrimaryHostBySessionKey: primaryHostBySessionKey
   }
 }
