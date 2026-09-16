@@ -233,7 +233,7 @@ export async function subscribeRemoteRuntimeTransport<TResult>(
       fail(
         new RemoteRuntimeClientError(
           'remote_runtime_unavailable',
-          remoteRuntimeConnectFailureMessage(error, pairing.endpoint, options?.connectTimeoutMs)
+          remoteRuntimeConnectFailureMessage(error, pairing.endpoint)
         )
       )
     }

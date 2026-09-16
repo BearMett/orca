@@ -59,9 +59,7 @@ export function openRemoteRuntimeWebSocket(
   const onError = (error: Error): void => {
     callbacks.onError(
       ws,
-      remoteRuntimeUnavailableError(
-        remoteRuntimeConnectFailureMessage(error, pairing.endpoint, connectTimeoutMs)
-      )
+      remoteRuntimeUnavailableError(remoteRuntimeConnectFailureMessage(error, pairing.endpoint))
     )
   }
   const onClose = (code: number, reason: Buffer): void => callbacks.onClose(ws, code, reason)

@@ -151,7 +151,7 @@ describe('RelayControlClient', () => {
   // Why: the connect deadline is armed in the same tick as the socket and expires from
   // 'opening' too, so it already bounds a connect that never opens. Without this a reader
   // concludes the phase is uncovered and adds a second, transport-level bound for it.
-  it('expires a connect whose upgrade is never answered, with no transport bound', async () => {
+  it('expires a connect whose upgrade is never answered', async () => {
     const server = createServer((socket) => {
       silentSockets.push(socket)
     })

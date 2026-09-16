@@ -34,12 +34,33 @@ export const REMOTE_RUNTIME_CONNECT_FAILURE_PHRASE = 'Could not connect to the r
 
 export function remoteRuntimeConnectOptions<TOptions extends ClientOptions>(
   options?: TOptions,
-  connectTimeoutMs: number = REMOTE_RUNTIME_CONNECT_TIMEOUT_MS
+  connectTimeoutMs?: number
 ): TOptions & { handshakeTimeout: number } {
   return {
     // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the empty default stands in for an absent TOptions; every property it could carry is optional, and the spread below is the only use.
     ...(options ?? ({} as TOptions)),
-    handshakeTimeout: connectTimeoutMs
+    // Why: `ws` and `net` both gate on a truthy timeout, so 0 (or a non-finite value)
+    // would silently leave the connect unbounded — the defect this module exists to fix.
+    handshakeTimeout:
+      typeof connectTimeoutMs === 'number' &&
+      Number.isFinite(connectTimeoutMs) &&
+      connectTimeoutMs > 0
+        ? connectTimeoutMs
+        : REMOTE_RUNTIME_CONNECT_TIMEOUT_MS
+  }
+}
+
+/**
+ * Why: the endpoint comes from a pasted pairing code, which is only length-capped and can
+ * carry userinfo. Show scheme, host and port and nothing else, so no secret and no unbounded
+ * string reaches a surface the user reads.
+ */
+function endpointForDisplay(endpoint: string): string {
+  try {
+    const url = new URL(endpoint)
+    return `${url.protocol}//${url.host}`
+  } catch {
+    return 'the paired endpoint'
   }
 }
 
@@ -52,16 +73,15 @@ export function isRemoteRuntimeConnectTimeout(error: unknown): boolean {
  * evidence that remote work stopped. This message says the host did not answer
  * and stops there — it must not imply the host's terminals are gone.
  */
-export function remoteRuntimeConnectFailureMessage(
-  error: unknown,
-  endpoint: string,
-  connectTimeoutMs: number = REMOTE_RUNTIME_CONNECT_TIMEOUT_MS
-): string {
+export function remoteRuntimeConnectFailureMessage(error: unknown, endpoint: string): string {
   if (!isRemoteRuntimeConnectTimeout(error)) {
     return `${REMOTE_RUNTIME_CONNECT_FAILURE_PHRASE}.`
   }
+  // Why no elapsed time: handshakeTimeout is an inactivity timer, so a `wss://` host that
+  // completes TCP and then goes silent re-arms it once and fails at ~2x the bound. Naming a
+  // number here would be wrong in that case; the endpoint is the actionable part anyway.
   return (
-    `${REMOTE_RUNTIME_CONNECT_FAILURE_PHRASE} at ${endpoint}: the host did not answer ` +
-    `within ${connectTimeoutMs / 1000}s, so anything running on it is unverifiable.`
+    `${REMOTE_RUNTIME_CONNECT_FAILURE_PHRASE} at ${endpointForDisplay(endpoint)}: the host ` +
+    'did not answer, so anything running on it is unverifiable.'
   )
 }

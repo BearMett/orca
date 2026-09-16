@@ -176,9 +176,36 @@ describe('remote runtime connect bound', () => {
     ).toContain('tailnet')
   })
 
-  it('states the bound in seconds rather than raw milliseconds', () => {
-    expect(
-      remoteRuntimeConnectFailureMessage(handshakeTimeoutError(), 'ws://h', 12_000)
-    ).toContain('within 12s')
+  // Why: the hint's idempotency check used to key on the word "tailscale" anywhere in the
+  // message. Now that the message carries the endpoint, such a host would suppress the very
+  // remedy it needs.
+  it('still earns the hint when the endpoint itself contains the vendor name', () => {
+    const endpoint = 'wss://tailscale-box.example.com:6768'
+    const message = remoteRuntimeConnectFailureMessage(handshakeTimeoutError(), endpoint)
+    expect(message).toContain('tailscale-box')
+    expect(withRemoteRuntimeTailscaleHint(message, endpoint)).toContain(
+      'connect both devices to Tailscale'
+    )
+  })
+
+  // Why: the endpoint arrives from a pasted pairing code, which is only length-capped.
+  it('shows the endpoint origin only, never pasted credentials', () => {
+    const message = remoteRuntimeConnectFailureMessage(
+      handshakeTimeoutError(),
+      'wss://user:s3cret@desk.example.com:6768/path?token=abc'
+    )
+    expect(message).toContain('wss://desk.example.com:6768')
+    expect(message).not.toContain('s3cret')
+    expect(message).not.toContain('token=abc')
+  })
+
+  // Why: `ws` and `net` gate on a truthy timeout, so 0 would leave the connect unbounded.
+  it('refuses a non-positive or non-finite bound and keeps the production default', () => {
+    for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(remoteRuntimeConnectOptions(undefined, value).handshakeTimeout).toBe(
+        REMOTE_RUNTIME_CONNECT_TIMEOUT_MS
+      )
+    }
+    expect(remoteRuntimeConnectOptions(undefined, 150).handshakeTimeout).toBe(150)
   })
 })
