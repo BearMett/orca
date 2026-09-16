@@ -9,6 +9,7 @@ import {
   RelayHostChallengeMessageSchema,
   RelayHostHelloAckMessageSchema,
   RelayPingMessageSchema,
+  RELAY_HOST_CAPABILITY_HEADERS,
   encodeRelayHostHello,
   parseRelayControlMessage,
   type RelayHostHelloAckMessage,
@@ -22,7 +23,6 @@ import {
   RelayControlSilenceWatchdog
 } from './relay-control-silence-watchdog'
 import { closeRelayControlSocket } from './relay-control-socket-close'
-import { createRelayControlSocket } from './relay-control-socket-factory'
 import { controlWebSocketUrl } from './relay-control-url'
 
 type RelayControlState = 'idle' | 'opening' | 'proving' | 'active' | 'draining' | 'closed'
@@ -55,13 +55,11 @@ export class RelayControlClient {
     this.createSocket =
       options.createSocket ??
       ((url, token) =>
-        createRelayControlSocket(
-          url,
-          token,
-          options.handshakeTimeoutMs ??
-            options.connectDeadlineMs ??
-            RELAY_CONTROL_CONNECT_DEADLINE_MS
-        ))
+        new WebSocket(url, {
+          headers: { authorization: `Bearer ${token}`, ...RELAY_HOST_CAPABILITY_HEADERS },
+          perMessageDeflate: false,
+          maxPayload: 64 * 1024
+        }))
   }
 
   connect(): Promise<RelayHostHelloAckMessage> {
@@ -88,6 +86,9 @@ export class RelayControlClient {
     })
     socket.once('close', (code) => this.handleClose(code))
     // Recovery cannot advance while an upgrade/proof promise remains pending forever.
+    // Armed in the same tick as the socket and expiring from 'opening' as well as
+    // 'proving', so it also bounds a black-holed connect that never opens; a
+    // transport-level handshakeTimeout here would be a second bound on that phase.
     this.connectTimer = setTimeout(
       () => this.expireConnect(),
       this.options.connectDeadlineMs ?? RELAY_CONTROL_CONNECT_DEADLINE_MS
