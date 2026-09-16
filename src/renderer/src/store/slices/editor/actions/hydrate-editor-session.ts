@@ -16,6 +16,7 @@ import {
   LegacyHydratedEditorFileIndex,
   shouldHydrateWithOwnedEditorFileId
 } from '../file-ids/hydrated-editor-file-ids'
+import { collectHydratedOrphanEditorFileIds } from '../file-ids/orphan-editor-file-ids'
 
 export function createHydrateEditorSession(
   set: EditorSet,
@@ -138,21 +139,44 @@ export function createHydrateEditorSession(
         // Why: transient diff/conflict surfaces aren't restored, so clear a stale "editor" marker and fall back to terminal.
         const nextActiveTabType =
           nextActiveFileId || activeTabType !== 'editor' ? activeTabType : 'terminal'
+        const migratedTabsAndGroups = migrateHydratedEditorTabsAndGroups(
+          s,
+          editorFileIdMigrationsByWorktree
+        )
+        // `?? {}` because an editor-only store (tests, partial slices) has no tab map at all.
+        const nextTabsByWorktree =
+          migratedTabsAndGroups.unifiedTabsByWorktree ?? s.unifiedTabsByWorktree ?? {}
+        const orphanFileIds = collectHydratedOrphanEditorFileIds(
+          openFiles,
+          nextTabsByWorktree,
+          filteredActiveFileIdByWorktree
+        )
+        const survivingIds = new Set(
+          [...usedOpenFileIds].filter((fileId) => !orphanFileIds.has(fileId))
+        )
         const markdownFrontmatterVisible = resolveHydratedEditorFrontmatter(
           persistedMarkdownFrontmatterVisible,
-          usedOpenFileIds,
+          survivingIds,
           editorFileIdMigrationsByWorktree
         )
 
         return {
-          openFiles,
-          editorDrafts,
+          openFiles:
+            orphanFileIds.size > 0
+              ? openFiles.filter((file) => !orphanFileIds.has(file.id))
+              : openFiles,
+          editorDrafts:
+            orphanFileIds.size > 0
+              ? Object.fromEntries(
+                  Object.entries(editorDrafts).filter(([fileId]) => !orphanFileIds.has(fileId))
+                )
+              : editorDrafts,
           markdownFrontmatterVisible,
           activeFileId: nextActiveFileId,
           activeFileIdByWorktree: filteredActiveFileIdByWorktree,
           activeTabType: nextActiveTabType,
           activeTabTypeByWorktree: filteredActiveTabTypeByWorktree,
-          ...migrateHydratedEditorTabsAndGroups(s, editorFileIdMigrationsByWorktree)
+          ...migratedTabsAndGroups
         }
       })
     }

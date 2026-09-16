@@ -1,0 +1,59 @@
+import type { Tab } from '../../../../../../shared/tab-types'
+import type { OpenFile } from '../types/open-file'
+import { isEditorTabContentType } from '../tabs/editor-tab-content-type'
+
+/**
+ * Open documents with no editor-family tab left. They render nowhere, but the active-surface
+ * fallback still selects one, which is how a closed file comes back on the next restart.
+ */
+export function collectOrphanEditorFileIds(
+  editorFileIds: ReadonlySet<string>,
+  tabs: readonly Tab[],
+  activeFileId: string | null | undefined
+): string[] {
+  if (editorFileIds.size === 0) {
+    return []
+  }
+  const tabbedEntityIds = new Set(
+    tabs.filter((tab) => isEditorTabContentType(tab.contentType)).map((tab) => tab.entityId)
+  )
+  return [...editorFileIds].filter(
+    (fileId) => !tabbedEntityIds.has(fileId) && fileId !== activeFileId
+  )
+}
+
+export function collectHydratedOrphanEditorFileIds(
+  openFiles: readonly Pick<OpenFile, 'id' | 'isDirty' | 'worktreeId'>[],
+  tabsByWorktree: Record<string, Tab[]>,
+  activeFileIdByWorktree: Record<string, string | null>
+): Set<string> {
+  const fileIdsByWorktree = new Map<string, Set<string>>()
+  for (const file of openFiles) {
+    // Why: an unsaved buffer must survive the sweep; only a clean document is disposable chrome.
+    if (file.isDirty === true) {
+      continue
+    }
+    const fileIds = fileIdsByWorktree.get(file.worktreeId)
+    if (fileIds) {
+      fileIds.add(file.id)
+      continue
+    }
+    fileIdsByWorktree.set(file.worktreeId, new Set([file.id]))
+  }
+  const orphanFileIds = new Set<string>()
+  for (const [worktreeId, fileIds] of fileIdsByWorktree) {
+    const tabs = tabsByWorktree[worktreeId]
+    // Why: a worktree with no hydrated tab model proves nothing about which documents are orphaned.
+    if (!tabs) {
+      continue
+    }
+    for (const fileId of collectOrphanEditorFileIds(
+      fileIds,
+      tabs,
+      activeFileIdByWorktree[worktreeId]
+    )) {
+      orphanFileIds.add(fileId)
+    }
+  }
+  return orphanFileIds
+}

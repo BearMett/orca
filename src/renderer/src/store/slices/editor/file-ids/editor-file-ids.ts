@@ -106,6 +106,41 @@ export function getReusableOpenFileModes(mode: OpenFile['mode']): readonly OpenF
   return [mode]
 }
 
+/**
+ * Every OpenFile that is the same edit document: one path, one owner. More than one record for
+ * that identity is corruption, but until it is gone a close has to sweep all of them or the
+ * survivors restore the tab on the next session write.
+ *
+ * Edit mode only: a path's diff variants all share `mode: 'diff'` and, for combined diffs, the
+ * worktree path, so their identity lives in `diffSource` — and only edit records persist, so only
+ * they can be duplicated by the session writer.
+ */
+export function collectSameDocumentOpenFileIds(
+  openFiles: readonly OpenFile[],
+  file: Pick<
+    OpenFile,
+    'id' | 'filePath' | 'worktreeId' | 'runtimeEnvironmentId' | 'externalSshTargetId' | 'mode'
+  >
+): Set<string> {
+  const fileIds = new Set<string>([file.id])
+  if (file.mode !== 'edit') {
+    return fileIds
+  }
+  const externalSshTargetId = file.externalSshTargetId?.trim() || null
+  const modes = getReusableOpenFileModes(file.mode)
+  for (const candidate of openFiles) {
+    if (
+      candidate.filePath === file.filePath &&
+      matchesEditorMode(candidate, modes) &&
+      isSameEditorOwner(candidate, file.worktreeId, file.runtimeEnvironmentId) &&
+      (candidate.externalSshTargetId?.trim() || null) === externalSshTargetId
+    ) {
+      fileIds.add(candidate.id)
+    }
+  }
+  return fileIds
+}
+
 export function resolveEditorFileIdForOwner(
   state: Pick<EditorSlice, 'openFiles'>,
   filePath: string,

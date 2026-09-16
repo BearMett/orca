@@ -36,15 +36,56 @@ function projectWorktreeTabModelReconciliations(
   // Private working copy so batch-owned maps can be written in place.
   const working = { ...state }
   const merged: Partial<AppState> = {}
+  const orphanEditorFileIds = new Set<string>()
   for (const worktreeId of worktreeIds) {
-    const { patch } = projectWorktreeTabModelReconciliation(working, worktreeId, batch)
-    if (Object.keys(patch).length === 0) {
+    const reconciliation = projectWorktreeTabModelReconciliation(working, worktreeId, batch)
+    for (const fileId of reconciliation.orphanEditorFileIds) {
+      orphanEditorFileIds.add(fileId)
+    }
+    if (Object.keys(reconciliation.patch).length === 0) {
       continue
     }
-    Object.assign(merged, patch)
-    Object.assign(working, patch)
+    Object.assign(merged, reconciliation.patch)
+    Object.assign(working, reconciliation.patch)
+  }
+  // Why only here: `openFiles` is written once the whole fold is projected, so the batch's
+  // one-shot editor index stays valid — and an unsaved buffer is never swept.
+  if (orphanEditorFileIds.size > 0) {
+    const sweptFileIds = new Set(
+      state.openFiles
+        .filter((file) => file.isDirty !== true && orphanEditorFileIds.has(file.id))
+        .map((file) => file.id)
+    )
+    if (sweptFileIds.size > 0) {
+      merged.openFiles = state.openFiles.filter((file) => !sweptFileIds.has(file.id))
+      const tabBarOrder = pruneTabBarOrderEntries(
+        working.tabBarOrderByWorktree ?? state.tabBarOrderByWorktree,
+        sweptFileIds
+      )
+      if (tabBarOrder) {
+        merged.tabBarOrderByWorktree = tabBarOrder
+      }
+    }
   }
   return merged
+}
+
+/** Why: a swept id left in the strip order still shifts positions on the next reconcile. */
+function pruneTabBarOrderEntries(
+  tabBarOrderByWorktree: AppState['tabBarOrderByWorktree'],
+  sweptFileIds: ReadonlySet<string>
+): AppState['tabBarOrderByWorktree'] | null {
+  if (!tabBarOrderByWorktree) {
+    return null
+  }
+  let changed = false
+  const next: AppState['tabBarOrderByWorktree'] = {}
+  for (const [worktreeId, order] of Object.entries(tabBarOrderByWorktree)) {
+    const pruned = order.filter((entryId) => !sweptFileIds.has(entryId))
+    changed = changed || pruned.length !== order.length
+    next[worktreeId] = pruned.length === order.length ? order : pruned
+  }
+  return changed ? next : null
 }
 
 export function createTabsSessionActions(
