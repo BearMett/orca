@@ -277,22 +277,24 @@ take a failure it cannot otherwise see, and only the hosting client should refus
 
 ## Known hazard: on the mobile surface a scope refusal is not a missing method
 
-The rest of this page assumes a peer probing an unknown method is told `method_not_found`
-— the agent-session harness above asserts exactly that. That is true of the
-runtime-scoped surface and **false of the mobile one**.
+The agent-session harness above asserts that a peer probing an unknown method is told
+`method_not_found`. That holds for the runtime-scoped surface and **not for the mobile one**.
 
 `runtime-rpc-websocket-dispatch.ts` checks `MOBILE_RPC_METHOD_ALLOWLIST` and answers
 `forbidden` _before_ it calls the dispatcher. A method a desktop predates is on neither the
 allowlist nor the registry, and the gate answers first, so a phone never sees
-`method_not_found` for it. `method_not_found` reaches a mobile-scoped device only for a
-method that is allowlisted but unregistered — which no shipped build has produced, because
-a method and its allowlist entry land in the same commit.
+`method_not_found` for it. `method_not_found` would reach a mobile-scoped device only for a
+method that is allowlisted but unregistered, and `src/main/runtime/mobile-rpc-allowlist.test.ts`
+requires every method the phone calls to be both, so that combination cannot ship. The reverse
+— a registered method that no release has allowlisted yet — is the skew that does occur.
 
 So a phone-side "is this host new enough to serve X?" probe must read **both** codes as
-absence. Keying it on `method_not_found` alone compiles, passes every same-version test, and
-never fires against the one desktop the fallback exists for. `pairing.provisionRelay` and
-`pairing.getEndpoints` had that defect: first-time QR pairing threw instead of committing a
-LAN host (`mobile/src/transport/pairing-relay-rpc-unavailable.ts`, pinned desktop-side by
+absence. Keying it on `method_not_found` alone compiles and passes every same-version test
+while never firing. The Files and Git fallbacks have read both since they shipped
+(`isMobileMethodUnavailableError`, `isMobileGitUnavailable`); the Relay pairing probes were the
+outlier, and the cost was a write-once direct-relay upgrade journal, holding a pending resume
+secret, that an old desktop could never retire
+(`mobile/src/transport/pairing-relay-rpc-unavailable.ts`, with the gate pinned desktop-side by
 `src/main/runtime/runtime-rpc-mobile-unknown-method-scope-refusal.test.ts`).
 
 Widening is safe only where `forbidden` cannot also mean a real authorization failure. Prove
@@ -301,5 +303,5 @@ answers `runtime_error`), a bad or revoked token answers `unauthorized`, and the
 of only two places in `src/main` that emits the code at all. A probe whose handler _can_
 refuse by authorization must not be widened.
 
-The cross-version harness does not run the mobile surface, so nothing reddens if this is
-forgotten.
+The cross-version harness dispatches as a mobile client but calls the dispatcher directly, so
+it never runs this gate and nothing reddens if any of the above is forgotten.

@@ -318,8 +318,9 @@ describe('pre-profile pairing coordinator', () => {
 
   // Why 'forbidden' and not only 'method_not_found': the desktop's mobile allowlist gate runs
   // before its RPC dispatcher, so a method a desktop predates is missing from both and the phone
-  // is refused by scope, never by absence. Keying the fallback on absence alone made the QR pair
-  // fail outright against the exact desktop the fallback exists for.
+  // is refused by scope, never by absence. A desktop that old also omits the offer's `relay` block,
+  // so this flow would not probe it at all — what this pins is the skew that stays reachable, a
+  // desktop that offers relay but does not allowlist the probe. Refusing it must still commit.
   it('tolerates an old desktop scope refusal and commits a direct-only host', async () => {
     const events: string[] = []
     const entries: ConnectionLogEntry[] = []
