@@ -2,7 +2,7 @@ import type { MutableRefObject } from 'react'
 import type { Editor } from '@tiptap/react'
 import {
   reconcileSerializedMarkdown,
-  restoreMarkdownSourceEol
+  restoreCanonicalMarkdownSourceEof
 } from './rich-markdown-source-reconcile'
 
 export type RichMarkdownReconcileRefs = {
@@ -55,12 +55,12 @@ export function commitRichMarkdownSerialization(
   } catch (error) {
     // Why: style reconciliation is best-effort; preserve content and source EOL when it fails.
     console.error('[editor] markdown reconcile failed; falling back to canonical output', error)
-    reconciled = restoreMarkdownSourceEol(edited, refs.originalSourceRef.current)
+    reconciled = restoreCanonicalMarkdownSourceEof(edited, refs.originalSourceRef.current)
   }
 
   refs.originalSourceRef.current = reconciled
   // Why: reconciled ≡ edited semantically, so its canonical form is `edited`
-  // (also correct in every fallback branch, which returns `edited` verbatim).
+  // (POSIX trailing newline is not part of getMarkdown).
   refs.baseCanonicalRef.current = edited
   // Why: the external-change guard short-circuits on lastCommittedMarkdownRef, so
   // it must hold the exact reconciled bytes that reach disk, not the canonical form.

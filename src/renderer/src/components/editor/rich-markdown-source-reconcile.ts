@@ -30,8 +30,15 @@ export type ReconcileSerializedMarkdownParams = {
   roundTrip: (markdown: string) => string | null
 }
 
-export function restoreMarkdownSourceEol(markdown: string, source: string): string {
-  return restoreEol(toLf(markdown), detectDominantEol(source))
+/**
+ * Canonical fallback: `edited` content, the source's dominant EOL, and the
+ * single POSIX trailing newline getMarkdown omitted.
+ */
+export function restoreCanonicalMarkdownSourceEof(edited: string, source: string): string {
+  return restoreEol(
+    attachPosixTrailingNewline(toLf(edited), toLf(source)),
+    detectDominantEol(source)
+  )
 }
 
 /**
@@ -70,48 +77,73 @@ export function reconcileSerializedMarkdown({
     Math.max(originalSource.length, baseCanonical.length, edited.length) >
     RECONCILE_SIZE_CAP_CODE_UNITS
   ) {
-    return restoreEol(editedLf, eol)
+    return restoreCanonicalMarkdownSourceEof(edited, originalSource)
   }
 
-  // Branch 4: run the divergent-base patch entirely in LF space.
   // Why: dmp's half-match accelerator ignores the diff deadline (100ms+ on repeated seeds), so bail to canonical for highly repetitive replacements.
   if (hasRepeatedHalfMatchSeed(baseLf, editedLf)) {
-    return restoreEol(editedLf, eol)
+    return restoreCanonicalMarkdownSourceEof(edited, originalSource)
   }
-  let diffs = makeDiff(baseLf, editedLf, {
+
+  const prove = (lf: string): boolean => {
+    const reparsed = roundTrip(lf)
+    return reparsed !== null && normalizeForSafety(reparsed) === normalizeForSafety(editedLf)
+  }
+
+  // Why: getMarkdown omits the source's single trailing `\n`, so an EOF hunk locates after it and fails the proof; patch the bodies first.
+  if (!baseLf.endsWith('\n') && originalTrailingNewlines.length === 1) {
+    const patched = patchDivergentSource(
+      stripTrailingNewlines(originalSourceLf),
+      baseLf,
+      stripTrailingNewlines(editedLf)
+    )
+    if (patched !== null) {
+      // Why `||` not `+`: edited's trailing run is semantic; concatenating the POSIX `\n` would become `\n\n\n`.
+      const trailing = (editedLf.match(/\n+$/)?.[0] ?? '') || originalTrailingNewlines
+      const reconciledLf = patched + trailing
+      if (prove(reconciledLf)) {
+        return restoreEol(attachPosixTrailingNewline(reconciledLf, originalSourceLf), eol)
+      }
+    }
+  }
+
+  const reconciledLf = patchDivergentSource(originalSourceLf, baseLf, editedLf)
+  if (reconciledLf !== null && prove(reconciledLf)) {
+    return restoreEol(attachPosixTrailingNewline(reconciledLf, originalSourceLf), eol)
+  }
+  return restoreCanonicalMarkdownSourceEof(edited, originalSource)
+}
+
+/** Null when any hunk failed to locate (Branch 5 for this attempt). */
+function patchDivergentSource(source: string, base: string, edited: string): string | null {
+  let diffs = makeDiff(base, edited, {
     checkLines: true,
     timeout: RECONCILE_DIFF_TIMEOUT_SECONDS
   })
-  // Match makePatches's cleanup while supplying our own bounded diff, avoiding the library's 1s timeout.
   if (diffs.length > 2) {
     diffs = cleanupSemantic(diffs)
     diffs = cleanupEfficiency(diffs)
   }
-  const patches = makePatches(baseLf, diffs)
+  const patches = makePatches(base, diffs)
   // Why: applyPatches decodes starts as UTF-8 offsets even though makePatches returns UTF-16 indices; encode against the divergent text being patched so decoding preserves the fuzzy-match seed.
   const utf8Offsets = getUtf8OffsetsAtCodeUnitIndices(
-    originalSourceLf,
+    source,
     patches.flatMap((patch) => [patch.start1, patch.start2])
   )
   for (const patch of patches) {
     patch.start1 = utf8Offsets.get(patch.start1) ?? 0
     patch.start2 = utf8Offsets.get(patch.start2) ?? 0
   }
-  const [reconciledLf, results] = applyPatches(patches, originalSourceLf)
+  const [patched, results] = applyPatches(patches, source)
+  return results.some((applied) => !applied) ? null : patched
+}
 
-  // Branch 5: a hunk failed to locate in the non-canonical source → unreliable fuzzy match, fall back to canonical.
-  if (results.some((applied) => !applied)) {
-    return restoreEol(editedLf, eol)
+function attachPosixTrailingNewline(lfText: string, originalSourceLf: string): string {
+  // Exactly one `\n` if the source ended with a newline and the result has none. Do not re-attach a run of length > 1 (`&nbsp;`).
+  if (lfText.endsWith('\n') || !originalSourceLf.endsWith('\n')) {
+    return lfText
   }
-
-  // Branch 6: prove reconciled bytes render-equal the editor's document — any fuzzy misplacement changes canonical output and is caught here → canonical fallback.
-  const reparsed = roundTrip(reconciledLf)
-  if (reparsed === null || normalizeForSafety(reparsed) !== normalizeForSafety(editedLf)) {
-    return restoreEol(editedLf, eol)
-  }
-
-  // Restore the detected EOL as the final step so reconciled CRLF stays CRLF.
-  return restoreEol(reconciledLf, eol)
+  return `${lfText}\n`
 }
 
 function stripTrailingNewlines(lfText: string): string {
