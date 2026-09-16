@@ -394,6 +394,38 @@ describe('scanCodexUsageFiles incremental append', () => {
     expect(totalTokens(second.dailyAggregates)).toBe(80)
   })
 
+  // A new session starts smaller than the head window, so its whole prefix is
+  // hashed as one window; once it outgrows both windows the layout switches to
+  // two disjoint ones. Resuming has to survive that switch instead of silently
+  // falling back to a full reparse on every later scan.
+  it('keeps resuming after the prefix outgrows the head window', async () => {
+    const rolloutPath = join(sessionsDir, 'rollout-outgrows-head.jsonl')
+    writeFileSync(
+      rolloutPath,
+      `${sessionMeta('session-outgrows')}${usageRecordRange(0, 3)}`,
+      'utf-8'
+    )
+    expect(statSync(rolloutPath).size).toBeLessThan(BOUNDARY_WINDOW_BYTES)
+
+    const first = await scanCodexUsageFiles([], [])
+    expect(totalTokens(first.dailyAggregates)).toBe(3)
+
+    appendFileSync(rolloutPath, usageRecordRange(3, 40), 'utf-8')
+    const sizeBeforeLastAppend = statSync(rolloutPath).size
+    expect(sizeBeforeLastAppend).toBeGreaterThan(2 * BOUNDARY_WINDOW_BYTES)
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    expect(totalTokens(second.dailyAggregates)).toBe(40)
+
+    streamReads.length = 0
+    appendFileSync(rolloutPath, usageRecordRange(40, 42), 'utf-8')
+    const third = await scanCodexUsageFiles([], second.processedFiles)
+    expect(totalTokens(third.dailyAggregates)).toBe(42)
+    // A stale head digest recorded under the old layout would force this scan
+    // to re-read the file from byte 0.
+    expect(bytesReadFor(rolloutPath)).toBeLessThan(sizeBeforeLastAppend)
+  })
+
   it('does not double-count a record completed after a partial trailing line', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-partial.jsonl')
     const complete = usageRecordRange(0, 3)
