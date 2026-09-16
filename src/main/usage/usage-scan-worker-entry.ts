@@ -1,0 +1,79 @@
+import { parentPort } from 'node:worker_threads'
+import { scanClaudeUsageFiles } from '../claude-usage/scanner'
+import { scanCodexUsageFiles } from '../codex-usage/scanner'
+import { scanOpenCodeUsageDatabases } from '../opencode-usage/scanner'
+import type {
+  UsageScanWorkerRequest,
+  UsageScanWorkerResponse,
+  UsageScanWorkerValue
+} from './usage-scan-worker-protocol'
+
+// Why (#20940): the Claude/Codex/OpenCode usage scans parse whole history
+// corpora and read SQLite synchronously. Running them on this worker thread
+// keeps that work off the Electron main-process event loop. The client
+// dispatches one request at a time, so this loop stays serial; imports must
+// remain electron-free (see the worker-protocol note) — the build's
+// plain-node-entry-guard enforces it for this entry.
+
+if (!parentPort) {
+  throw new Error('Usage scan worker must run with a parent port.')
+}
+const port = parentPort
+
+async function runScan(request: UsageScanWorkerRequest): Promise<UsageScanWorkerValue> {
+  // Switched, not table-driven: each branch narrows `previous` to that
+  // provider's own record type, so nothing here needs a type assertion.
+  switch (request.providerId) {
+    case 'claude': {
+      const result = await scanClaudeUsageFiles(request.worktrees, request.previous)
+      return {
+        providerId: 'claude',
+        source: result.processedFiles,
+        sessions: result.sessions,
+        dailyAggregates: result.dailyAggregates
+      }
+    }
+    case 'codex': {
+      const result = await scanCodexUsageFiles(request.worktrees, request.previous)
+      return {
+        providerId: 'codex',
+        source: result.processedFiles,
+        sessions: result.sessions,
+        dailyAggregates: result.dailyAggregates
+      }
+    }
+    case 'opencode': {
+      const result = await scanOpenCodeUsageDatabases(request.worktrees, request.previous)
+      return {
+        providerId: 'opencode',
+        source: result.processedDatabases,
+        sessions: result.sessions,
+        dailyAggregates: result.dailyAggregates
+      }
+    }
+  }
+}
+
+async function handleRequest(request: UsageScanWorkerRequest): Promise<UsageScanWorkerResponse> {
+  try {
+    return { id: request.id, ok: true, value: await runScan(request) }
+  } catch (err) {
+    return { id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+port.on('message', (request: UsageScanWorkerRequest) => {
+  void handleRequest(request).then((response) => {
+    try {
+      port.postMessage(response)
+    } catch {
+      // A non-cloneable result would otherwise post nothing and leave the client
+      // waiting out its timeout; fail that request fast instead.
+      port.postMessage({
+        id: request.id,
+        ok: false,
+        error: 'Usage scan worker result could not be serialized.'
+      })
+    }
+  })
+})

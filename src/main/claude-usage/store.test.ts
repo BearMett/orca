@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeUsagePersistedState } from './types'
-import type * as Scanner from './scanner'
 
 const { getPathMock } = vi.hoisted(() => ({
   getPathMock: vi.fn(() => '/tmp/orca-test-userdata')
@@ -15,13 +14,12 @@ vi.mock('electron', () => ({
   }
 }))
 
-vi.mock('./scanner', async (importOriginal) => ({
-  ...(await importOriginal<typeof Scanner>()),
-  scanClaudeUsageFiles: vi.fn()
+vi.mock('../usage/usage-scan-worker-spawn', () => ({
+  scanClaudeUsageFilesViaWorker: vi.fn()
 }))
 
 import { ClaudeUsageStore, initClaudeUsagePath } from './store'
-import { scanClaudeUsageFiles } from './scanner'
+import { scanClaudeUsageFilesViaWorker } from '../usage/usage-scan-worker-spawn'
 
 function createBackingStore(): ConstructorParameters<typeof ClaudeUsageStore>[0] {
   return {
@@ -58,8 +56,8 @@ describe('ClaudeUsageStore', () => {
     tempUserData = mkdtempSync(join(tmpdir(), 'orca-claude-usage-store-'))
     getPathMock.mockReturnValue(tempUserData)
     initClaudeUsagePath()
-    vi.mocked(scanClaudeUsageFiles).mockReset()
-    vi.mocked(scanClaudeUsageFiles).mockResolvedValue({
+    vi.mocked(scanClaudeUsageFilesViaWorker).mockReset()
+    vi.mocked(scanClaudeUsageFilesViaWorker).mockResolvedValue({
       processedFiles: [],
       sessions: [],
       dailyAggregates: []
@@ -703,7 +701,7 @@ describe('ClaudeUsageStore', () => {
 
     await store.refresh(true)
 
-    expect(scanClaudeUsageFiles).toHaveBeenCalledWith([], [])
+    expect(scanClaudeUsageFilesViaWorker).toHaveBeenCalledWith([], [])
     expect(readFileSync(join(tempUserData, 'orca-claude-usage.json'), 'utf-8')).toContain('\n')
   })
 })
