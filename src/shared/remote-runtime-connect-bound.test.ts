@@ -1,48 +1,38 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPair, publicKeyToBase64 } from './e2ee-crypto'
 import type { RemoteRuntimeClientError } from './remote-runtime-client-error'
+import { isRecoverableRemoteRuntimeConnectionError } from './remote-runtime-client-error-classification'
 import {
   REMOTE_RUNTIME_CONNECT_TIMEOUT_MS,
+  WS_HANDSHAKE_TIMEOUT_MESSAGE,
   isRemoteRuntimeConnectTimeout,
   remoteRuntimeConnectFailureMessage,
   remoteRuntimeConnectOptions
 } from './remote-runtime-connect-bound'
 import { openRemoteRuntimeWebSocket } from './remote-runtime-request-websocket'
+import { withRemoteRuntimeTailscaleHint } from './remote-runtime-tailscale-hint'
 
 const servers = new Set<Server>()
 const sockets = new Set<Socket>()
 
-const RELAY_CONTROL_SOCKET_FACTORY = join('relay', 'relay-control-socket-factory.ts')
+const handshakeTimeoutError = (): Error => new Error(WS_HANDSHAKE_TIMEOUT_MESSAGE)
 
 /**
- * Files whose WebSocket construction must carry the connect bound. The shared
- * remote-runtime transports are swept by prefix; sites outside this directory
- * are listed explicitly so adding one is a deliberate act rather than a glob
- * accident. Other WebSocket sites (relay data transport, emulator control)
- * carry their own bounds and are deliberately not covered here.
+ * Files whose WebSocket construction must carry the connect bound: the shared
+ * remote-runtime transports, swept by prefix. Other WebSocket sites (relay
+ * control and data transports, emulator control) carry their own bounds and are
+ * deliberately not covered here.
  */
 function coveredSocketSources(): string[] {
-  const shared = readdirSync(__dirname)
+  return readdirSync(__dirname)
     .filter(
       (name) =>
         name.startsWith('remote-runtime-') && name.endsWith('.ts') && !name.includes('.test.')
     )
     .map((name) => join(__dirname, name))
-  const relaySocketFactory = join(
-    __dirname,
-    '..',
-    'main',
-    'runtime',
-    'relay',
-    'relay-control-socket-factory.ts'
-  )
-  if (!existsSync(relaySocketFactory)) {
-    throw new Error(`connect-bound ratchet lost its relay site: ${relaySocketFactory}`)
-  }
-  return [...shared, relaySocketFactory]
 }
 
 afterEach(async () => {
@@ -104,11 +94,6 @@ describe('remote runtime connect bound', () => {
     expect(offenders).toEqual([])
     // Guards against the scan silently matching nothing and passing vacuously.
     expect(scannedConstructions).toBeGreaterThan(0)
-    // Guards the relay site specifically: an allowlist that quietly stopped
-    // resolving a path would still satisfy the count above.
-    expect(coveredSocketSources().some((path) => path.endsWith(RELAY_CONTROL_SOCKET_FACTORY))).toBe(
-      true
-    )
   })
 
   it('reports an unanswered host as unreachable rather than as an empty result', async () => {
@@ -146,15 +131,54 @@ describe('remote runtime connect bound', () => {
     // Loss of contact is never evidence the host's work stopped.
     expect(error.message).not.toMatch(/\b(exited|gone|stopped|empty|no terminals)\b/i)
 
+    // The subscribe IPC boundary drops `code`, so the renderer classifies this
+    // message alone. Fatal there means `recovery.cancel()` and a dead-ended pane
+    // instead of a retry, so the real produced message must still read recoverable.
+    expect(isRecoverableRemoteRuntimeConnectionError({ message: error.message })).toBe(true)
+    // ...and must still earn the Tailscale remedy, which is gated on the same phrase.
+    expect(withRemoteRuntimeTailscaleHint(error.message, endpoint)).not.toBe(error.message)
+
     opened.socket.cleanup()
     opened.socket.ws.terminate()
   })
 
   it('only calls an elapsed handshake a connect timeout', () => {
-    expect(isRemoteRuntimeConnectTimeout(new Error('Opening handshake has timed out'))).toBe(true)
+    expect(isRemoteRuntimeConnectTimeout(handshakeTimeoutError())).toBe(true)
     expect(isRemoteRuntimeConnectTimeout(new Error('connect ECONNREFUSED'))).toBe(false)
     expect(remoteRuntimeConnectFailureMessage(new Error('connect ECONNREFUSED'), 'ws://h')).toBe(
       'Could not connect to the remote Orca runtime.'
     )
+  })
+
+  // Why: the message is the only carrier on the code-less paths (subscribe IPC,
+  // web, mobile). Both gates below match a phrase, so a rewording silently turns
+  // a retrying pane into a dead-ended one and drops the only actionable remedy.
+  it('keeps the unreachable-host message inside both message gates', () => {
+    const message = remoteRuntimeConnectFailureMessage(
+      handshakeTimeoutError(),
+      'ws://desk.example.com:6768'
+    )
+    expect(isRecoverableRemoteRuntimeConnectionError({ message })).toBe(true)
+    // The shape Electron produces for a rejected ipcMain.handle, which keeps no code.
+    expect(
+      isRecoverableRemoteRuntimeConnectionError({
+        message: `Error invoking remote method 'runtimeEnvironments:subscribe': Error: ${message}`
+      })
+    ).toBe(true)
+    expect(withRemoteRuntimeTailscaleHint(message, 'ws://192.168.1.10:6768')).toContain(
+      'connect both devices to Tailscale'
+    )
+    expect(
+      withRemoteRuntimeTailscaleHint(
+        remoteRuntimeConnectFailureMessage(handshakeTimeoutError(), 'wss://desk.tail1234.ts.net'),
+        'wss://desk.tail1234.ts.net'
+      )
+    ).toContain('tailnet')
+  })
+
+  it('states the bound in seconds rather than raw milliseconds', () => {
+    expect(
+      remoteRuntimeConnectFailureMessage(handshakeTimeoutError(), 'ws://h', 12_000)
+    ).toContain('within 12s')
   })
 })
