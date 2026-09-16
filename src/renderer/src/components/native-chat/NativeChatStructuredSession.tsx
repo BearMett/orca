@@ -4,6 +4,7 @@ import { dispatchStructuredAgentSessionComposerCommand } from '../../../../share
 import { structuredAgentSessionPaneKey } from '../../../../shared/structured-agent-session-projection'
 import type { NativeChatLiveSession } from './use-native-chat-live-session'
 import { NativeChatApprovalCard } from './NativeChatApprovalCard'
+import { NativeChatPlanApprovalCard } from './NativeChatPlanApprovalCard'
 import { NativeChatComposer, type NativeChatComposerHandle } from './NativeChatComposer'
 import { NativeChatEmptyState } from './NativeChatEmptyState'
 import { NativeChatMessageList } from './NativeChatMessageList'
@@ -23,6 +24,10 @@ import { useNativeChatLaunchDraftSignal } from './use-native-chat-launch-draft-a
 import { NativeChatLaunchRetry } from './NativeChatLaunchRetry'
 import { useNativeChatProvisionalLaunch } from './use-native-chat-provisional-launch'
 import { NativeChatDeliveryRetry } from './NativeChatDeliveryRetry'
+import {
+  NativeChatDisclosureContext,
+  useNativeChatDisclosures
+} from './native-chat-disclosure-store'
 
 function encodeQuestionAnswer(questionId: string, answer: string): string {
   return `${encodeURIComponent(questionId)}:${encodeURIComponent(answer)}`
@@ -120,6 +125,7 @@ export function NativeChatStructuredSession(
         }))
       }
     : null
+  const promptDisclosures = useNativeChatDisclosures()
   const cancelPrompt = () => {
     if (controller.turnId && prompt) {
       void controller.cancel(controller.turnId, {
@@ -238,14 +244,30 @@ export function NativeChatStructuredSession(
           />
         )}
       </div>
-      {prompt && approval ? (
-        <NativeChatApprovalCard
-          key={`${prompt.itemId}:${prompt.revision}`}
-          approval={approval}
-          onChoose={(optionId) => void controller.respond(prompt, optionId)}
-          onCancel={cancelPrompt}
-          shouldFocus={props.isVisible && props.isFocusedGroup}
-        />
+      {prompt && approvalBody && approval ? (
+        <NativeChatDisclosureContext.Provider value={promptDisclosures}>
+          {approvalBody.subject?.kind === 'plan' ? (
+            <NativeChatPlanApprovalCard
+              key={`${prompt.itemId}:${prompt.revision}`}
+              approval={approval}
+              plan={approvalBody.subject}
+              disclosureKey={`${prompt.itemId}:plan`}
+              onLinkClick={onLinkClick}
+              allowFileUriLinks={onLinkClick !== undefined}
+              onChoose={(optionId) => void controller.respond(prompt, optionId)}
+              onCancel={cancelPrompt}
+              shouldFocus={props.isVisible && props.isFocusedGroup}
+            />
+          ) : (
+            <NativeChatApprovalCard
+              key={`${prompt.itemId}:${prompt.revision}`}
+              approval={approval}
+              onChoose={(optionId) => void controller.respond(prompt, optionId)}
+              onCancel={cancelPrompt}
+              shouldFocus={props.isVisible && props.isFocusedGroup}
+            />
+          )}
+        </NativeChatDisclosureContext.Provider>
       ) : null}
       {prompt && questionBody ? (
         <NativeChatQuestionCard

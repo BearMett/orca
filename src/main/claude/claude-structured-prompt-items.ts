@@ -22,6 +22,13 @@ const APPROVAL_LABELS: Record<ClaudeApprovalDecision, string> = {
   cancel: 'Stop'
 }
 
+const PLAN_APPROVAL_LABELS: Record<ClaudeApprovalDecision, string> = {
+  allow: 'Approve plan',
+  allowForSession: 'Approve plan for this session',
+  deny: 'Keep planning',
+  cancel: 'Stop'
+}
+
 const PENDING = {
   state: 'pending',
   selectedOptionId: null,
@@ -42,7 +49,8 @@ export function claudePromptIdentity(input: {
 }
 
 export function claudeApprovalItem(prompt: ClaudePendingPrompt): AgentJournalApprovalItem {
-  const detail = truncateToolDetail(formatToolInput(prompt.input))
+  const detail = prompt.subject ? '' : truncateToolDetail(formatToolInput(prompt.input))
+  const labels = prompt.subject?.kind === 'plan' ? PLAN_APPROVAL_LABELS : APPROVAL_LABELS
   return boundJournalPromptBody({
     kind: 'approval',
     title: prompt.title ?? `Allow ${prompt.toolName}?`,
@@ -51,10 +59,11 @@ export function claudeApprovalItem(prompt: ClaudePendingPrompt): AgentJournalApp
     ...(prompt.decisionReason ? { decisionReason: prompt.decisionReason } : {}),
     ...(prompt.blockedPath ? { blockedPath: prompt.blockedPath } : {}),
     ...(prompt.matchedAskRule ? { matchedAskRule: prompt.matchedAskRule } : {}),
+    ...(prompt.subject ? { subject: prompt.subject } : {}),
     detail: detail || null,
     options: CLAUDE_APPROVAL_DECISIONS.map((decision) => ({
       id: decision,
-      label: APPROVAL_LABELS[decision]
+      label: labels[decision]
     })),
     resolution: { ...PENDING }
   })

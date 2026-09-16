@@ -1,6 +1,7 @@
 import { memo, useRef, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { ShieldQuestion, X } from 'lucide-react-native'
+import { MobileMarkdown } from '../components/MobileMarkdown'
 import { colors, radii, spacing, typography } from '../theme/mobile-theme'
 import type { MobileChatPermission } from './mobile-native-chat-permission'
 
@@ -68,7 +69,14 @@ function MobileNativeChatPermissionImpl({
           {permission.matchedAskRule.source}
         </Text>
       ) : null}
-      {permission.detail ? (
+      {permission.subject?.kind === 'plan' ? (
+        <ScrollView style={styles.detailScroll} nestedScrollEnabled>
+          <MobileMarkdown content={permission.subject.text} />
+          {permission.subject.filePath ? (
+            <Text style={styles.planFile}>Plan file: {permission.subject.filePath}</Text>
+          ) : null}
+        </ScrollView>
+      ) : permission.detail ? (
         <ScrollView style={styles.detailScroll} nestedScrollEnabled>
           <Text style={styles.detail}>{permission.detail}</Text>
         </ScrollView>
@@ -140,6 +148,13 @@ const styles = StyleSheet.create({
   },
   detailScroll: {
     maxHeight: 240
+  },
+  planFile: {
+    marginTop: spacing.sm,
+    color: colors.textSecondary,
+    fontFamily: typography.monoFamily,
+    fontSize: typography.metaSize,
+    lineHeight: typography.metaSize + 5
   },
   options: {
     flexDirection: 'row',

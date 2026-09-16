@@ -62,6 +62,29 @@ describe('Claude structured approval presentation', () => {
     })
   })
 
+  it('journals a plan as a typed subject without the generic JSON detail', () => {
+    const prompt = approvalPrompt(
+      { plan: '# Release\n\n- Run tests', planFilePath: '/repo/plan.md' },
+      {
+        title: 'Claude wants to present its plan',
+        subject: { kind: 'plan', text: '# Release\n\n- Run tests', filePath: '/repo/plan.md' }
+      }
+    )
+
+    expect(claudeApprovalItem(prompt)).toMatchObject({
+      kind: 'approval',
+      title: 'Claude wants to present its plan',
+      subject: { kind: 'plan', text: '# Release\n\n- Run tests', filePath: '/repo/plan.md' },
+      detail: null,
+      options: [
+        { id: 'allow', label: 'Approve plan' },
+        { id: 'allowForSession', label: 'Approve plan for this session' },
+        { id: 'deny', label: 'Keep planning' },
+        { id: 'cancel', label: 'Stop' }
+      ]
+    })
+  })
+
   it.each([{ plan: '' }, {}])(
     'falls back to a reconstructed title when the harness sends no presentation',
     (input) => {
