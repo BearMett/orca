@@ -17,6 +17,14 @@ import type { ClientOptions } from 'ws'
  * The value matches `CONNECT_TIMEOUT_MS` in
  * `src/renderer/src/web/web-runtime-connection-transport.ts`, which already
  * bounded the browser transport (a wall-clock budget there).
+ *
+ * Why this is not the duplicate bound that was removed from the relay control
+ * socket: there, both timers were 15s and the class one was wall-clock from
+ * construction, so the transport timer could never win and covered nothing.
+ * Here the whole-request timer is 15s (60s in the CLI) and measures the RPC,
+ * not the connect, and this one is inactivity-based and strictly tighter — so
+ * it is the bound that actually reports an unanswered host, with the specific
+ * message the recovery classifiers need, rather than a generic RPC timeout.
  */
 export const REMOTE_RUNTIME_CONNECT_TIMEOUT_MS = 12_000
 
