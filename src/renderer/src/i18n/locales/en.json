@@ -17159,6 +17159,7 @@
         "model": "Model",
         "effort": "Effort",
         "fastMode": "Fast mode",
+        "planMode": "Plan mode",
         "thinking": "Thinking",
         "options": "Options",
         "sessionOptions": "Session options",
@@ -17173,6 +17174,8 @@
         "optionUpdateFailed": "Could not update option",
         "optionValue": {
           "fast": "Fast",
+          "normal": "Normal",
+          "plan": "Plan",
           "minimal": "Minimal",
           "low": "Low",
           "medium": "Medium",

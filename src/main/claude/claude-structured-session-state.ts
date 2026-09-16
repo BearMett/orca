@@ -18,6 +18,7 @@ import type {
 } from '../../shared/agent-session-wire'
 import type { ClaudeBackgroundTaskTracker } from './claude-background-task-tracker'
 import type { ClaudeSlashCommandCatalog } from './claude-slash-command-catalog'
+import type { StructuredAgentSessionPermissionMode } from '../../shared/structured-agent-session-permission-mode'
 
 export type ClaudeAuthDiagnostic = {
   apiKeySourceConfigured: boolean
@@ -135,7 +136,14 @@ export type ClaudeSession = {
   /** Once a retired waiter is evicted, legacy content-only replay matching is unsafe. */
   replayContentFallbackBlocked: boolean
   options: Map<string, string>
-  reportedOptions: { model?: string; effort?: string; fastMode?: boolean }
+  reportedOptions: {
+    model?: string
+    effort?: string
+    fastMode?: boolean
+    permissionMode?: StructuredAgentSessionPermissionMode
+  }
+  /** Non-plan mode observed when this provider session started. */
+  basePermissionMode?: StructuredAgentSessionPermissionMode
   fastModeState?: AgentSessionFastModeState
   fastModeDisabledReason?: string
   fastModePerSessionOptIn?: boolean

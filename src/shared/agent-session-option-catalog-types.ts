@@ -56,6 +56,8 @@ export type CatalogModel = {
 export type AgentSessionOptionCatalog = {
   models: CatalogModel[]
   modelApply: CatalogOptionApply
+  /** Provider-owned controls that exist only on a live structured session. */
+  structuredSessionOptions?: CatalogOption[]
   /** Opts this agent into structured per-worker launch overrides. */
   supportsWorkerLaunchPreferences?: true
   /** Launch-safe options for opaque model ids that are absent from the static catalog. */

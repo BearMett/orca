@@ -104,9 +104,6 @@ export async function acquireClaudeSession({
     }
     if (init) {
       initDeadline.resolve(init)
-      // Every turn opens with an init frame naming the model the CLI is actually
-      // running; set_model answers success for a model it never resolves, so this
-      // report is the session's only adoption evidence.
       if (liveSession && init.model) {
         liveSession.reportedOptions.model = init.model
         liveSession.reportedModelMutation = liveSession.optionMutationSequence

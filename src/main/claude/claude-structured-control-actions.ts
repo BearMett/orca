@@ -5,6 +5,7 @@ import {
   type ClaudeLateDispatchSettlement
 } from './claude-structured-dispatch'
 import type { ClaudeSession } from './claude-structured-session-state'
+import { setClaudeStructuredOption } from './claude-structured-options'
 
 const INTERRUPT_CANCEL_QUEUED_CAPABILITY = 'interrupt_cancel_queued_v1'
 
@@ -96,4 +97,17 @@ export async function answerClaudePrompt(
   session.prompts.forget(claim.found.prompt)
   claim.found.prompt.settle(response)
   session.translator?.journalPrompts.resolve(claim.found.prompt.promptKey)
+  if (
+    claim.found.prompt.toolName === 'ExitPlanMode' &&
+    session.options.get('permissionMode') === 'plan' &&
+    session.basePermissionMode
+  ) {
+    // Let the provider consume the prompt answer before converging its live mode.
+    await Promise.resolve()
+    await setClaudeStructuredOption(
+      session,
+      { key: 'permissionMode', value: session.basePermissionMode },
+      undefined
+    )
+  }
 }

@@ -187,8 +187,7 @@ describe('ClaudeStructuredSessionAdapter.acquire', () => {
 
   it.each([
     ['model', 'set_model', { model: 'retired-model' }],
-    ['effort', 'apply_flag_settings', { effort: 'retired-effort' }],
-    ['permissionMode', 'set_permission_mode', { permissionMode: 'retired-mode' }]
+    ['effort', 'apply_flag_settings', { effort: 'retired-effort' }]
   ] as const)(
     'self-heals a persisted %s rejected during restore',
     async (key, subtype, options) => {
@@ -212,6 +211,26 @@ describe('ClaudeStructuredSessionAdapter.acquire', () => {
       expect(adapter.readOptionRestoreFailures('session-1')).toEqual([key])
     }
   )
+
+  it('self-heals an invalid persisted permission mode without dispatching it', async () => {
+    const claude = fakeClaude()
+    const adapter = adapterFor(claude)
+
+    await expect(
+      adapter.acquire({
+        identity: identityFor(),
+        fence: 7,
+        spawnToken: 'spawn-9',
+        options: { permissionMode: 'retired-mode' }
+      })
+    ).resolves.toBeDefined()
+
+    expect(adapter.readOptionRestoreFailures('session-1')).toEqual(['permissionMode'])
+    expect(claude.connections[0].calls.map(({ subtype }) => subtype)).toContain('get_settings')
+    expect(claude.connections[0].calls.map(({ subtype }) => subtype)).not.toContain(
+      'set_permission_mode'
+    )
+  })
 
   it('does not treat a transport timeout while restoring an option as recoverable', async () => {
     const claude = fakeClaude({
@@ -657,6 +676,59 @@ describe('ClaudeStructuredSessionAdapter acquisition cleanup', () => {
 })
 
 describe('ClaudeStructuredSessionAdapter prompts', () => {
+  it.each(['allow', 'deny', 'cancel'] as const)(
+    'restores the prior permission mode after an ExitPlanMode %s answer',
+    async (decision) => {
+      let permissionMode = 'acceptEdits'
+      const writtenModes: string[] = []
+      const claude = fakeClaude({
+        initPermissionMode: 'acceptEdits',
+        routes: {
+          get_settings: () => ({ applied: { permissionMode } }),
+          set_permission_mode: (params) => {
+            permissionMode = String(params?.mode)
+            writtenModes.push(permissionMode)
+          }
+        }
+      })
+      const adapter = await acquired(claude)
+
+      await adapter.setOption({
+        sessionId: 'session-1',
+        key: 'permissionMode',
+        value: 'plan',
+        fence: 7
+      })
+      const answered = invokeCanUseTool(
+        claude.connections[0],
+        'ExitPlanMode',
+        `exit-plan-${decision}`,
+        `tool-${decision}`
+      )
+      adapter.bindPromptItemId('session-1', `journal-${decision}`, `exit-plan-${decision}`)
+
+      await adapter.answerPrompt({
+        sessionId: 'session-1',
+        itemId: `journal-${decision}`,
+        kind: 'approval',
+        optionId: decision,
+        fence: 7,
+        commit: async () => {}
+      })
+
+      await expect(answered.promise).resolves.toMatchObject({
+        behavior: decision === 'allow' ? 'allow' : 'deny'
+      })
+      expect(writtenModes).toEqual(['plan', 'acceptEdits'])
+      await expect(
+        adapter.readOptions({ sessionId: 'session-1', fence: 7 })
+      ).resolves.toMatchObject({
+        permissionModeRestoreValue: 'acceptEdits',
+        current: { permissionMode: 'acceptEdits' }
+      })
+    }
+  )
+
   it('turns can_use_tool into an addressable durable approval that settles the SDK callback', async () => {
     const claude = fakeClaude()
     const events: ClaudeStructuredSessionEvent[] = []

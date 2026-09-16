@@ -1,4 +1,4 @@
-import type { EffortLevel, PermissionMode } from '@anthropic-ai/claude-agent-sdk'
+import type { EffortLevel } from '@anthropic-ai/claude-agent-sdk'
 import { ClaudeControlRequestError } from './claude-stream-json-connection'
 import {
   AgentSessionOptionRejectedError,
@@ -11,10 +11,12 @@ import {
   readClaudeCurrentModel,
   readClaudeListedModels,
   readClaudeSettingsEffort,
-  readClaudeSettingsFastMode
+  readClaudeSettingsFastMode,
+  readClaudeSettingsPermissionMode
 } from './claude-structured-session-options'
 import type { ClaudeSession } from './claude-structured-session-state'
 import { decodeStructuredAgentSessionOptionValue } from '../../shared/structured-agent-session-option-codec'
+import { readStructuredAgentSessionPermissionMode } from '../../shared/structured-agent-session-permission-mode'
 
 const OPTION_ORDER = ['model', 'effort', 'fastMode', 'permissionMode'] as const
 
@@ -46,11 +48,16 @@ export async function setClaudeStructuredOption(
     input.key === 'fastMode'
       ? decodeStructuredAgentSessionOptionValue('fastMode', input.value)
       : null
+  const permissionMode =
+    input.key === 'permissionMode' ? readStructuredAgentSessionPermissionMode(input.value) : null
+  if (input.key === 'permissionMode' && !permissionMode) {
+    throw new AgentSessionOptionRejectedError(`claude permission mode ${input.value} is invalid`)
+  }
   const apply =
     input.key === 'model'
       ? () => session.connection.setModel(input.value, { timeoutMs })
-      : input.key === 'permissionMode'
-        ? () => session.connection.setPermissionMode(input.value as PermissionMode, { timeoutMs })
+      : permissionMode
+        ? () => session.connection.setPermissionMode(permissionMode, { timeoutMs })
         : input.key === 'effort'
           ? () =>
               session.connection.applyFlagSettings(
@@ -124,6 +131,11 @@ export async function setClaudeStructuredOption(
       : null
   const modelWasConfirmed = readClaudeCurrentModel(session).confirmed
   const mutationSequence = ++session.optionMutationSequence
+  const previousPermissionMode = session.options.get('permissionMode')
+  if (permissionMode) {
+    // The frame observer only adopts mode changes while a user-owned write is live.
+    session.options.set('permissionMode', permissionMode)
+  }
   // Only a model write can stale the model report — an effort or permission-mode
   // write does not change what the child is running. Leaving the stamp behind
   // would drop the session back to the written model and refuse, on the next
@@ -150,6 +162,13 @@ export async function setClaudeStructuredOption(
       return Object.fromEntries(session.options)
     }
   } catch (error) {
+    if (permissionMode) {
+      if (previousPermissionMode === undefined) {
+        session.options.delete('permissionMode')
+      } else {
+        session.options.set('permissionMode', previousPermissionMode)
+      }
+    }
     if (error instanceof ClaudeControlRequestError) {
       throw new AgentSessionOptionRejectedError(error)
     }
@@ -158,13 +177,19 @@ export async function setClaudeStructuredOption(
   // apply_flag_settings answers `success` for an effort it then ignores, so the
   // absence of a throw proves nothing. Ask what the child actually holds.
   const adopted =
-    (input.key === 'effort' && !UNREPORTED_EFFORTS.has(input.value)) || input.key === 'fastMode'
+    (input.key === 'effort' && !UNREPORTED_EFFORTS.has(input.value)) ||
+    input.key === 'fastMode' ||
+    input.key === 'permissionMode'
       ? await session.connection
           .getSettings({ timeoutMs })
           .then((settings) =>
             input.key === 'fastMode'
               ? readClaudeSettingsFastMode(settings)
-              : readClaudeSettingsEffort(settings)
+              : input.key === 'permissionMode'
+                ? (readClaudeSettingsPermissionMode(settings) ??
+                  session.reportedOptions.permissionMode ??
+                  null)
+                : readClaudeSettingsEffort(settings)
           )
           .catch(() => null)
       : null
@@ -174,16 +199,39 @@ export async function setClaudeStructuredOption(
   if (input.key === 'fastMode' && typeof adopted === 'boolean') {
     session.reportedOptions.fastMode = adopted
   }
+  const adoptedPermissionMode =
+    input.key === 'permissionMode' ? readStructuredAgentSessionPermissionMode(adopted) : null
+  if (adoptedPermissionMode) {
+    session.reportedOptions.permissionMode = adoptedPermissionMode
+  }
   // A disagreement stops main vouching for the value, it does not veto the write:
   // the pre-flight guard already refused levels the model advertises no control for,
   // so what is left is the child reporting a value it chose for itself. Keep the
   // child's own answer so the disagreement survives as the level a later read falls
   // back to.
-  const decodedInput = input.key === 'fastMode' ? fastMode : input.value
-  if (adopted !== null && adopted !== decodedInput) {
-    if (typeof adopted === 'string') {
-      session.reportedOptions.effort = adopted
+  const decodedInput =
+    input.key === 'fastMode'
+      ? fastMode
+      : input.key === 'permissionMode'
+        ? permissionMode
+        : input.value
+  if (permissionMode && permissionMode !== 'plan' && adoptedPermissionMode !== permissionMode) {
+    if (previousPermissionMode === undefined) {
+      session.options.delete('permissionMode')
+    } else {
+      session.options.set('permissionMode', previousPermissionMode)
     }
+    if (adoptedPermissionMode !== null && adoptedPermissionMode === previousPermissionMode) {
+      session.confirmedOptions.add('permissionMode')
+    } else {
+      session.confirmedOptions.delete('permissionMode')
+    }
+    throw new AgentSessionOptionRejectedError(
+      `claude did not confirm leaving plan mode for ${permissionMode}`
+    )
+  }
+  if (input.key === 'effort' && typeof adopted === 'string' && adopted !== decodedInput) {
+    session.reportedOptions.effort = adopted
   }
   session.options.set(
     input.key,
@@ -195,6 +243,9 @@ export async function setClaudeStructuredOption(
     session.confirmedOptions.add(input.key)
   } else {
     session.confirmedOptions.delete(input.key)
+  }
+  if (permissionMode && permissionMode !== 'plan') {
+    session.options.delete('permissionMode')
   }
   // The effort readback was taken under the old model, so a model switch retires
   // it: the child keeps the value but nothing has reported the new model holding

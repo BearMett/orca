@@ -34,6 +34,10 @@ export function createClaudeSessionPublication(input: {
   const model = input.init.model
   const effort = input.effort
   const fastMode = input.fastMode
+  const basePermissionMode =
+    input.init.permissionMode && input.init.permissionMode !== 'plan'
+      ? input.init.permissionMode
+      : undefined
   return {
     acquisition: {
       process: input.process,
@@ -67,8 +71,10 @@ export function createClaudeSessionPublication(input: {
       reportedOptions: {
         ...(model ? { model } : {}),
         ...(effort ? { effort } : {}),
-        ...(fastMode !== null ? { fastMode } : {})
+        ...(fastMode !== null ? { fastMode } : {}),
+        ...(basePermissionMode ? { permissionMode: basePermissionMode } : {})
       },
+      ...(basePermissionMode ? { basePermissionMode } : {}),
       ...(input.fastModeState ? { fastModeState: input.fastModeState } : {}),
       ...(input.fastModeDisabledReason
         ? { fastModeDisabledReason: input.fastModeDisabledReason }
@@ -79,7 +85,8 @@ export function createClaudeSessionPublication(input: {
       reportedModelMutation: 0,
       confirmedOptions: new Set([
         ...(effort ? ['effort'] : []),
-        ...(fastMode !== null ? ['fastMode'] : [])
+        ...(fastMode !== null ? ['fastMode'] : []),
+        ...(basePermissionMode ? ['permissionMode'] : [])
       ]),
       restoreSkippedOptions: new Set(),
       translator: input.translator,

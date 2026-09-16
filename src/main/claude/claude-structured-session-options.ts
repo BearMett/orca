@@ -14,6 +14,10 @@ import {
 } from './claude-structured-model-catalog'
 import type { ClaudeSession } from './claude-structured-session-state'
 import { decodeStructuredAgentSessionOptionValue } from '../../shared/structured-agent-session-option-codec'
+import {
+  readStructuredAgentSessionPermissionMode,
+  type StructuredAgentSessionPermissionMode
+} from '../../shared/structured-agent-session-permission-mode'
 
 /**
  * The session's current effort, which only `get_settings` reports: the
@@ -33,6 +37,32 @@ export function readClaudeSettingsFastMode(settings: unknown): boolean | null {
 export function readClaudeSettingsFastModePerSessionOptIn(settings: unknown): boolean | null {
   const value = record(record(settings)?.effective)?.fastModePerSessionOptIn
   return typeof value === 'boolean' ? value : null
+}
+
+export function readClaudeSettingsPermissionMode(
+  settings: unknown
+): StructuredAgentSessionPermissionMode | null {
+  const settingsRecord = record(settings)
+  return (
+    readStructuredAgentSessionPermissionMode(record(settingsRecord?.applied)?.permissionMode) ??
+    readStructuredAgentSessionPermissionMode(record(settingsRecord?.effective)?.permissionMode)
+  )
+}
+
+export function observeClaudeUserPermissionMode(session: ClaudeSession, value: unknown): void {
+  if (!session.options.has('permissionMode')) {
+    return
+  }
+  const permissionMode = readStructuredAgentSessionPermissionMode(record(value)?.permissionMode)
+  if (!permissionMode) {
+    return
+  }
+  session.reportedOptions.permissionMode = permissionMode
+  if (session.options.get('permissionMode') === permissionMode) {
+    session.confirmedOptions.add('permissionMode')
+  } else {
+    session.confirmedOptions.delete('permissionMode')
+  }
 }
 
 const FAST_MODE_STATES: readonly AgentSessionFastModeState[] = ['off', 'cooldown', 'on']
@@ -55,6 +85,7 @@ export function readClaudeFastModeFacts(value: unknown): {
 }
 
 export function observeClaudeFastModeFacts(session: ClaudeSession, value: unknown): void {
+  observeClaudeUserPermissionMode(session, value)
   const facts = readClaudeFastModeFacts(value)
   if (facts.state) {
     session.fastModeState = facts.state
@@ -210,6 +241,9 @@ export async function readClaudeStructuredSessionOptions(
     const effort = readClaudeSettingsEffort(settings)
     const fastMode = readClaudeSettingsFastMode(settings)
     const perSessionOptIn = readClaudeSettingsFastModePerSessionOptIn(settings)
+    const permissionMode = session.options.has('permissionMode')
+      ? readClaudeSettingsPermissionMode(settings)
+      : null
     if (effort) {
       session.reportedOptions.effort = effort
     }
@@ -222,6 +256,14 @@ export async function readClaudeStructuredSessionOptions(
     }
     if (perSessionOptIn !== null) {
       session.fastModePerSessionOptIn = perSessionOptIn
+    }
+    if (permissionMode) {
+      session.reportedOptions.permissionMode = permissionMode
+      if (session.options.get('permissionMode') === permissionMode) {
+        session.confirmedOptions.add('permissionMode')
+      } else {
+        session.confirmedOptions.delete('permissionMode')
+      }
     }
   }
   const discovered = listedModels(catalog ? { models: catalog } : null)
@@ -253,13 +295,15 @@ export async function readClaudeStructuredSessionOptions(
     session.reportedOptions.fastMode ??
     (session.fastModeState === undefined ? undefined : session.fastModeState !== 'off')
   const support = claudeFastModeSupport(discovered, session.fastModeDisabledReason)
+  const permissionMode = session.reportedOptions.permissionMode
   const confirmed = [
     ...(current.confirmed ? ['model'] : []),
     ...(effort && session.confirmedOptions.has('effort') ? ['effort'] : []),
     ...(fastMode !== undefined &&
     (session.confirmedOptions.has('fastMode') || !session.options.has('fastMode'))
       ? ['fastMode']
-      : [])
+      : []),
+    ...(permissionMode && session.confirmedOptions.has('permissionMode') ? ['permissionMode'] : [])
   ]
   return {
     models: models.map((entry) => ({
@@ -271,11 +315,15 @@ export async function readClaudeStructuredSessionOptions(
       ...(entry.supportsFastMode !== undefined ? { supportsFastMode: entry.supportsFastMode } : {})
     })),
     ...(support ? { fastModeSupport: support } : {}),
+    ...(session.basePermissionMode
+      ? { permissionModeRestoreValue: session.basePermissionMode }
+      : {}),
     current: {
       model,
       ...(effort ? { effort } : {}),
       ...(fastMode !== undefined ? { fastMode } : {}),
       ...(session.fastModeState ? { fastModeState: session.fastModeState } : {}),
+      ...(permissionMode ? { permissionMode } : {}),
       ...(confirmed.length > 0 ? { confirmed } : {})
     }
   }

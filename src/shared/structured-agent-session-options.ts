@@ -49,9 +49,49 @@ function fastModeOption(): CatalogOption {
   }
 }
 
+const PROVIDER_DISCOVERED_OPTION_IDS = new Set(['effort', 'fastMode'])
+
+function sessionOption(
+  option: CatalogOption,
+  permissionModeRestoreValue: AgentSessionOptionsResult['permissionModeRestoreValue']
+): CatalogOption | null {
+  if (option.id !== 'permissionMode') {
+    return option
+  }
+  if (!permissionModeRestoreValue || permissionModeRestoreValue === 'plan') {
+    return null
+  }
+  return {
+    ...option,
+    kind: {
+      type: 'select',
+      choices: [
+        { value: permissionModeRestoreValue, label: 'Normal' },
+        { value: 'plan', label: 'Plan' }
+      ],
+      defaultValue: permissionModeRestoreValue
+    }
+  }
+}
+
+function retainedSessionOptions(
+  options: readonly CatalogOption[],
+  permissionModeRestoreValue: AgentSessionOptionsResult['permissionModeRestoreValue']
+): CatalogOption[] {
+  return options.flatMap((option) => {
+    if (PROVIDER_DISCOVERED_OPTION_IDS.has(option.id)) {
+      return []
+    }
+    const retained = sessionOption(option, permissionModeRestoreValue)
+    return retained ? [retained] : []
+  })
+}
+
 function discoveredModel(
   model: AgentSessionOptionsResult['models'][number],
-  sessionSupportsFastMode: boolean
+  sessionSupportsFastMode: boolean,
+  seedOptions: readonly CatalogOption[],
+  permissionModeRestoreValue: AgentSessionOptionsResult['permissionModeRestoreValue']
 ): CatalogModel {
   const effort = effortOption(model)
   return {
@@ -61,7 +101,8 @@ function discoveredModel(
     ...(model.isDefault ? { isDefault: true } : {}),
     options: [
       ...(effort ? [effort] : []),
-      ...(sessionSupportsFastMode && model.supportsFastMode === true ? [fastModeOption()] : [])
+      ...(sessionSupportsFastMode && model.supportsFastMode === true ? [fastModeOption()] : []),
+      ...retainedSessionOptions(seedOptions, permissionModeRestoreValue)
     ]
   }
 }
@@ -70,14 +111,30 @@ export function structuredAgentSessionOptionCatalog(
   seed: AgentSessionOptionCatalog,
   result: AgentSessionOptionsResult
 ): AgentSessionOptionCatalog {
-  const models: CatalogModel[] = result.models.map((model) =>
-    discoveredModel(model, result.fastModeSupport?.supported === true)
-  )
+  const models: CatalogModel[] = result.models.map((model) => {
+    const modelOptions =
+      seed.models.find((candidate) => candidate.id === model.id)?.options ??
+      seed.unknownModelOptions ??
+      []
+    const seedOptions = [...modelOptions, ...(seed.structuredSessionOptions ?? [])]
+    return discoveredModel(
+      model,
+      result.fastModeSupport?.supported === true,
+      seedOptions,
+      result.permissionModeRestoreValue
+    )
+  })
   if (!models.some((model) => model.id === result.current.model)) {
     models.push({
       id: result.current.model,
       label: result.current.model,
-      options: seed.unknownModelOptions ?? []
+      options: [
+        ...(seed.unknownModelOptions ?? []),
+        ...(seed.structuredSessionOptions ?? [])
+      ].flatMap((option) => {
+        const retained = sessionOption(option, result.permissionModeRestoreValue)
+        return retained ? [retained] : []
+      })
     })
   }
   return { ...seed, models, defaultModelIsCliDefault: true }
@@ -103,12 +160,16 @@ export function applyStructuredAgentSessionOptions(
   if (result.current.fastMode === undefined) {
     clearTrackedSessionOption(state.record, result.current.model, 'fastMode')
   }
+  if (result.current.permissionMode === undefined) {
+    clearTrackedSessionOption(state.record, result.current.model, 'permissionMode')
+  }
   applyNativeChatReportedSessionOptions(
     state.record,
     {
       model: result.current.model,
       ...(result.current.effort ? { effort: result.current.effort } : {}),
-      ...(result.current.fastMode !== undefined ? { fastMode: result.current.fastMode } : {})
+      ...(result.current.fastMode !== undefined ? { fastMode: result.current.fastMode } : {}),
+      ...(result.current.permissionMode ? { permissionMode: result.current.permissionMode } : {})
     },
     result.current.confirmed ?? []
   )

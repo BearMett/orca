@@ -91,6 +91,21 @@ function claudeEffortWithChoices(choices: typeof EXTENDED_EFFORT_CHOICES): Catal
   }
 }
 
+const CLAUDE_PERMISSION_MODE: CatalogOption = {
+  id: 'permissionMode',
+  label: 'Plan mode',
+  category: 'mode',
+  kind: {
+    type: 'select',
+    choices: [
+      { value: 'default', label: 'Normal' },
+      { value: 'plan', label: 'Plan' }
+    ],
+    defaultValue: 'default'
+  },
+  apply: {}
+}
+
 export function createClaudeCatalogOptions(args: {
   effortLevelIds: readonly string[]
   supportsFastMode?: boolean
@@ -174,6 +189,7 @@ export const CLAUDE_SESSION_OPTION_CATALOG: AgentSessionOptionCatalog = {
     }
   },
   unknownModelOptions: [claudeEffort(true)],
+  structuredSessionOptions: [CLAUDE_PERMISSION_MODE],
   listModels: {
     command: `echo '${CLAUDE_MODEL_LIST_STDIN.trim()}' | claude ${CLAUDE_MODEL_LIST_ARGS.join(' ')}`,
     parse: parseClaudeCatalogModels
