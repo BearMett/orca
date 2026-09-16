@@ -1,3 +1,6 @@
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import type { Page } from '@stablyai/playwright-test'
 import { expect, test } from './helpers/orca-app'
 import { pressShortcut } from './helpers/shortcuts'
@@ -18,7 +21,55 @@ const COMPOSER_TEXTAREA = '.orca-diff-comment-popover-textarea'
 
 type StoredNote = { startLine?: number; lineNumber: number; body: string }
 
+// Committed baseline: the gesture needs a real unstaged modification of a tracked
+// file. A brand-new file is untracked, and its diff opens with no gutter lines.
+const SEED_BASELINE = 'export const seed = true\n'
+const SEED_LINE_COUNT = 24
+// Highest gutter line any test below reaches; seeing it proves the modified model
+// (not just the first cell) has landed before the gesture starts.
+const SEED_SYNC_LINE = 9
+
 async function seedDiffFile(page: Page, worktreeId: string, relative: string): Promise<void> {
+  const { worktreePath, storeRel } = await page.evaluate(
+    ({ wId, rel }) => {
+      const store = window.__store
+      if (!store) {
+        throw new Error('window.__store is not available - is the app in dev mode?')
+      }
+      const worktree = Object.values(store.getState().worktreesByRepo)
+        .flat()
+        .find((entry) => entry.id === wId)
+      if (!worktree) {
+        throw new Error('active worktree not found')
+      }
+      const separator = worktree.path.includes('\\') ? '\\' : '/'
+      return { worktreePath: worktree.path, storeRel: rel.split('/').join(separator) }
+    },
+    { wId: worktreeId, rel: relative }
+  )
+
+  // Commit the baseline when it is not already tracked (idempotent across reruns
+  // on the worker-scoped fixture repo), then rewrite the working tree on top.
+  const absolutePath = path.join(worktreePath, ...relative.split('/'))
+  mkdirSync(path.dirname(absolutePath), { recursive: true })
+  writeFileSync(absolutePath, SEED_BASELINE)
+  const porcelain = execFileSync('git', ['status', '--porcelain', '--', relative], {
+    cwd: worktreePath,
+    encoding: 'utf8'
+  })
+  if (porcelain.trim() !== '') {
+    execFileSync('git', ['add', '--', relative], { cwd: worktreePath, stdio: 'pipe' })
+    execFileSync('git', ['commit', '-m', `e2e seed ${relative} for diff-note-range`], {
+      cwd: worktreePath,
+      stdio: 'pipe'
+    })
+  }
+  const lines = Array.from(
+    { length: SEED_LINE_COUNT },
+    (_, index) => `export const line${String(index + 1).padStart(2, '0')} = ${index + 1}`
+  )
+  writeFileSync(absolutePath, `${lines.join('\n')}\n`)
+
   await page.evaluate(
     async ({ wId, rel }) => {
       const store = window.__store
@@ -33,25 +84,38 @@ async function seedDiffFile(page: Page, worktreeId: string, relative: string): P
         throw new Error('active worktree not found')
       }
       const separator = worktree.path.includes('\\') ? '\\' : '/'
-      const lines = Array.from(
-        { length: 24 },
-        (_, index) => `export const line${String(index + 1).padStart(2, '0')} = ${index + 1}`
-      )
-      await window.api.fs.writeFile({
-        filePath: `${worktree.path}${separator}${rel}`,
-        content: `${lines.join('\n')}\n`
-      })
       // Inline keeps the modified side's line numbers in its own margin, which is the
       // column the gesture is aimed at.
       await state.updateSettings({ diffDefaultView: 'inline' })
       state.openDiff(wId, `${worktree.path}${separator}${rel}`, rel, 'typescript', false)
     },
-    { wId: worktreeId, rel: relative }
+    { wId: worktreeId, rel: storeRel }
   )
   await expect(
     page.locator('.modified-in-monaco-diff-editor .margin .line-numbers').first(),
     'diff gutter never rendered'
   ).toBeVisible({ timeout: 20_000 })
+  await expect
+    .poll(async () => hasGutterLine(page, SEED_SYNC_LINE), {
+      timeout: 20_000,
+      message: 'modified diff content never rendered its gutter lines'
+    })
+    .toBe(true)
+}
+
+async function hasGutterLine(page: Page, lineNumber: number): Promise<boolean> {
+  return page.evaluate((target: number) => {
+    const editor = document.querySelector('.monaco-editor.modified-in-monaco-diff-editor')
+    if (!editor) {
+      return false
+    }
+    for (const cell of editor.querySelectorAll('.margin .line-numbers')) {
+      if (Number.parseInt(cell.textContent?.trim() ?? '', 10) === target) {
+        return true
+      }
+    }
+    return false
+  }, lineNumber)
 }
 
 // Centre of a line's number cell — the column the "+" lives in and the gesture starts from.
