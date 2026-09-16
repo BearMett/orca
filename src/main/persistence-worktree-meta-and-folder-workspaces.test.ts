@@ -676,4 +676,27 @@ describe('Store', () => {
     // back on the next launch as a workspace the user already deleted.
     expect(store.getWorkspaceSession('ssh:target-1').tabsByWorktree[key]).toBeUndefined()
   })
+
+  it('removes a deleted project group’s folder workspaces from every partition', async () => {
+    const store = await createStore()
+    const group = store.createProjectGroup({
+      name: 'Remote group',
+      parentPath: '/remote/group',
+      createdFrom: 'folder-scan',
+      connectionId: 'target-1'
+    })
+    const workspace = store.createFolderWorkspace({ projectGroupId: group.id, name: 'Group fix' })
+    const key = folderWorkspaceKey(workspace.id)
+    store.setWorkspaceSession(
+      {
+        ...getDefaultWorkspaceSession(),
+        tabsByWorktree: { [key]: [makeTerminalTab({ id: 'group-folder-tab', worktreeId: key })] }
+      },
+      'ssh:target-1'
+    )
+
+    expect(store.deleteProjectGroup(group.id)).toBe(true)
+
+    expect(store.getWorkspaceSession('ssh:target-1').tabsByWorktree[key]).toBeUndefined()
+  })
 })

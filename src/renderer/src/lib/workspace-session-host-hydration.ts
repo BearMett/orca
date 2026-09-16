@@ -6,6 +6,7 @@ import {
   parseExecutionHostId,
   type ExecutionHostId
 } from '../../../shared/execution-host'
+import { normalizeWorkspaceSessionKeyToWorkspaceId } from '../../../shared/workspace-scope'
 import { getRepoIdFromWorktreeId } from '../../../shared/worktree/id'
 import {
   createRepoRowExecutionHostLookup,
@@ -216,7 +217,11 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
   for (const [hostId, slice] of sshPartitions) {
     const adoption = adoptStrandedHostPartitionSession(session, slice, {
       contestedSessionKeys: attribution.contestedSessionKeys,
-      foreignSessionKeys: attribution.foreignSessionKeysByHostId.get(hostId)
+      foreignSessionKeys: unownedSessionKeys(
+        session,
+        attribution.contestedSessionKeys,
+        attribution.foreignSessionKeysByHostId.get(hostId)
+      )
     })
     session = adoption.session
     for (const workspaceId of adoption.adoptedWorkspaceIds) {
@@ -288,9 +293,14 @@ function sshPartitionCatalogAttribution(
     const foreign = new Set<string>()
     const owned = new Set<string>()
     for (const workspaceId of workspaceIdsNamedByPartition(slice)) {
-      const repoId = getRepoIdFromWorktreeId(workspaceId)
-      const resolution = repoId
-        ? resolveWorktreeExecutionHost(repoLookup, { repoId, hostId: null })
+      // A folder key carries no repo id at all, and `getRepoIdFromWorktreeId` hands back the whole
+      // key rather than nothing, so the catalog would be asked about `folder:<uuid>` and answer
+      // `unknown`. Right verdict, wasted resolution; skip it by shape instead.
+      const resolution = isWorktreeSessionKey(workspaceId)
+        ? resolveWorktreeExecutionHost(repoLookup, {
+            repoId: getRepoIdFromWorktreeId(workspaceId),
+            hostId: null
+          })
         : null
       if (resolution?.kind === 'resolved' && resolution.hostId !== hostId) {
         foreign.add(workspaceId)
@@ -328,4 +338,38 @@ function sessionKeysHeldByMultiplePartitionSets(sets: readonly ReadonlySet<strin
     }
   }
   return contested
+}
+
+/**
+ * Keys this partition must not contribute: the ones the catalog gave to another host, plus a
+ * contested id the assembled session holds no row for at all.
+ *
+ * Why the second class: a contested id is withheld from the read-source override, so the write
+ * re-derives an owner — and for an id the catalog cannot name, that answer is 'local'. Adopting
+ * such a row would move it out of the partition that owns it and into the blob, which is the
+ * two-store split this whole change removes. Gap-filling stays available for a contested id the
+ * session already has a row for, because that row's own partition is what the write follows.
+ * Declining to adopt leaks a row into invisibility for one boot; it never deletes one.
+ */
+function unownedSessionKeys(
+  session: WorkspaceSessionState,
+  contestedSessionKeys: ReadonlySet<string>,
+  foreignSessionKeys: ReadonlySet<string> | undefined
+): ReadonlySet<string> {
+  if (contestedSessionKeys.size === 0) {
+    return foreignSessionKeys ?? new Set<string>()
+  }
+  const unowned = new Set(foreignSessionKeys ?? [])
+  const known = workspaceIdsNamedByPartition(session)
+  for (const key of contestedSessionKeys) {
+    if (!known.has(normalizeWorkspaceSessionKeyToWorkspaceId(key))) {
+      unowned.add(key)
+    }
+  }
+  return unowned
+}
+
+/** A worktree session key names its repo before `::`; a folder key names no repo at all. */
+function isWorktreeSessionKey(workspaceId: string): boolean {
+  return workspaceId.includes('::')
 }

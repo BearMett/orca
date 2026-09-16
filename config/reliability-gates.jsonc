@@ -558,7 +558,9 @@
             "returns adopted rows to the partition they were read from with no repo catalog",
             "gap-fills instead of replacing, so the local workspace keeps its unsaved draft",
             "never names the rival partition as the write target for a contested id",
-            "treats two ssh partitions naming one id as contested too"
+            "gap-fills a contested id from the same partition on every boot",
+            "does not adopt a partition the catalog says does not own the workspace",
+            "does not adopt a contested id the assembled session holds no row for"
           ]
         },
         {

@@ -117,8 +117,10 @@ function catalogAttributionForPartition(
   const contestedSessionKeys = new Set<string>()
   const foreignSessionKeys = new Set<string>()
   for (const workspaceId of workspaceIdsNamedByPartition(host)) {
-    // A folder key carries no repo id; asking the catalog about it only spends a resolution.
-    if (!getRepoIdFromWorktreeId(workspaceId)) {
+    // A folder key names no repo, and `getRepoIdFromWorktreeId` hands back the whole key rather
+    // than nothing, so the catalog would be asked about `folder:<uuid>` and answer `unknown`.
+    // Right verdict, wasted resolution; skip it by shape instead.
+    if (!workspaceId.includes('::')) {
       continue
     }
     const resolution = resolveWorktreeOwner(workspaceId)

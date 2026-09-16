@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { getDefaultWorkspaceSession } from '../../../shared/constants'
-import type { ExecutionHostId } from '../../../shared/execution-host'
+import { normalizeExecutionHostId, type ExecutionHostId } from '../../../shared/execution-host'
 import type { TerminalTab } from '../../../shared/terminal-tab-types'
 import type {
   WorkspaceSessionPatch,
@@ -55,7 +55,9 @@ function partitionedApi(partitions: Partial<Record<string, WorkspaceSessionState
   return {
     get: async (hostId?: ExecutionHostId) =>
       partitions[hostId ?? 'local'] ?? getDefaultWorkspaceSession(),
-    listHostIds: async () => Object.keys(partitions) as ExecutionHostId[]
+    // Normalised rather than asserted, the same way the real census filters its storage keys.
+    listHostIds: async () =>
+      Object.keys(partitions).flatMap((hostId) => normalizeExecutionHostId(hostId) ?? [])
   }
 }
 
@@ -209,28 +211,51 @@ describe('a bare workspace id two partitions both hold', () => {
     expect(read.contestedPrimaryHostBySessionKey?.[WORKTREE_ID]).not.toBe(SSH_HOST_ID)
   })
 
-  it('treats two ssh partitions naming one id as contested, and picks the same one every boot', async () => {
+  it('gap-fills a contested id from the same partition on every boot', async () => {
     const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
       partitionedApi({
         // Listed with the higher host id first so insertion order and sort order disagree: without
         // the sort the winner would follow whichever order the census happened to return.
         [OTHER_SSH_HOST_ID]: session({
-          tabsByWorktree: { [WORKTREE_ID]: [tab('tab-two', WORKTREE_ID)] },
-          activeTabIdByWorktree: { [WORKTREE_ID]: 'tab-two' }
+          tabsByWorktree: { [WORKTREE_ID]: [tab('tab-two', WORKTREE_ID)] }
         }),
-        local: session({}),
+        // The assembled session names the id through its editor row, so the id is not adrift - but
+        // it holds no terminal row, which is the gap the two partitions both offer to fill.
+        local: session({ openFilesByWorktree: { [WORKTREE_ID]: [openFile('/checkout/a.ts')] } }),
         [SSH_HOST_ID]: session({
           tabsByWorktree: { [WORKTREE_ID]: [tab('tab-one', WORKTREE_ID)] }
         })
       }),
-      // Deliberately no repo row: the catalog says nothing, so the ONLY thing that can mark this id
+      // Deliberately no repo row: the catalog says nothing, so the only thing that can mark this id
       // contested is the two partitions both naming it.
       []
     )
 
     expect(read.session.tabsByWorktree[WORKTREE_ID]?.map((entry) => entry.id)).toEqual(['tab-one'])
-    // Contested ids are withheld from the read-source override entirely, so the write falls back to
-    // catalog routing instead of carrying one host's rows into the other's partition.
+    // Contested ids are withheld from the read-source override, so the write cannot carry one
+    // host's rows into the other's partition.
+    expect(read.contestedPrimaryHostBySessionKey?.[WORKTREE_ID]).not.toBe(SSH_HOST_ID)
+    expect(read.contestedPrimaryHostBySessionKey?.[WORKTREE_ID]).not.toBe(OTHER_SSH_HOST_ID)
+  })
+
+  it('does not adopt a contested id the assembled session holds no row for', async () => {
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
+      partitionedApi({
+        local: session({}),
+        [SSH_HOST_ID]: session({
+          tabsByWorktree: { [WORKTREE_ID]: [tab('tab-one', WORKTREE_ID)] }
+        }),
+        [OTHER_SSH_HOST_ID]: session({
+          tabsByWorktree: { [WORKTREE_ID]: [tab('tab-two', WORKTREE_ID)] }
+        })
+      }),
+      []
+    )
+
+    // A contested id is withheld from the read-source override, so the write re-derives an owner -
+    // and with no catalog that answer is 'local'. Adopting the row would move it out of the
+    // partition that owns it and into the blob, which is the two-store split this change removes.
+    expect(read.session.tabsByWorktree[WORKTREE_ID]).toBeUndefined()
     expect(read.contestedPrimaryHostBySessionKey?.[WORKTREE_ID]).toBeUndefined()
   })
 
