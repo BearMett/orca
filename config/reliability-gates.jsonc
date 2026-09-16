@@ -504,14 +504,15 @@
         "https://github.com/stablyai/orca/issues/18173",
         "https://github.com/stablyai/orca/blob/main/src/shared/workspace-session-partition-owner.ts"
       ],
-      "invariant": "Every workspace the `ssh:<targetId>` partition names is hydrated at boot and published to the host, whatever kind of state it holds - terminal tabs, open editor files with unsaved hot-exit drafts, browser workspaces, tab groups, or host-qualified visit recency. An empty tab row is read as a gap, never as evidence the tabs were closed, so a replace-session upload can never delete a populated host list. A workspace the local partition already holds terminal tabs for is left untouched, and every workspace routes back to the partition that owns it. Adoption never destroys what it was not told about: a host row the partition holds nothing for cannot replace a populated base row, and a bare id the read found contested is gap-filled rather than replaced, because that is exactly the id where `local` and `ssh:<targetId>` are not one workspace written twice. Tab-, pane- and file-keyed rows are recovered through the same indexes the split routed them by. An explicit empty tab row written by this build survives the round trip as a present empty row and is declined by the shared seeding predicate.",
-      "oracle": "Seed a real Store the way shipping builds leave it: the local blob holds the worktree key with an empty list while `ssh:<targetId>` holds the real one, with a second populated SSH partition present. Publish through the IPC handler with no session argument (the path the debounced writer takes) and assert the host snapshot carries the runtime-authored tabs rather than []. Separately drive the shipping split (buildWorkspaceSessionHostSnapshots) and feed its own output back through the real boot read, pinning the write and read halves to each other rather than to a hand-built fixture: an SSH workspace with open editor files, an unsaved dirtyDraftContent and no terminal tabs must come back intact, as must one with no tabsByWorktree key at all. Export and re-import through the real projection and merge through mergeDirectSshRemoteWorkspaceSession, asserting tabs survive a publish, the next pull, and an older client publishing an empty list for them. Assert the reunited workspace routes to `ssh:<targetId>`, that a workspace the base holds tabs for is not modified, and that a contested id claimed by an SSH and a runtime host does not send the SSH rows into the rotating runtime partition.",
+      "invariant": "Every workspace the `ssh:<targetId>` partition names is hydrated at boot and published to the host, whatever kind of state it holds - terminal tabs, open editor files with unsaved hot-exit drafts, browser workspaces, tab groups, or host-qualified visit recency. An empty tab row is read as a gap, never as evidence the tabs were closed, so a replace-session upload can never delete a populated host list. A workspace the local partition already holds terminal tabs for is left untouched, and every workspace routes back to the partition that owns it. Adoption never destroys what it was not told about: a host row the partition holds nothing for cannot replace a populated base row, and a bare id the read found contested is gap-filled rather than replaced, because that is exactly the id where `local` and `ssh:<targetId>` are not one workspace written twice. Tab-, pane- and file-keyed rows are recovered through the same indexes the split routed them by. An explicit empty tab row written by this build survives the round trip as a present empty row and is declined by the shared seeding predicate. Boot enumerates the partitions persistence actually holds rather than inferring them from the repo catalog, so a target whose only workspace is a folder is read like any other; a folder workspace routes to the same partition main's RuntimeWorkspaceSessionController writes it to, so one workspace is never written into two stores; and a workspace adopted out of a partition routes back to that partition even on a boot whose repo catalog cannot name the host, so the write cannot re-strand what the read just reunited. `contested` means a repo id the catalog registers on more than one host, or two SSH partitions naming one id - never the mere co-presence of 'local' and `ssh:<targetId>`, which is the repair's own input.",
+      "oracle": "Assert the renderer routes an SSH folder workspace to `ssh:<targetId>`, that its save carries the folder row to that partition and leaves none behind in 'local' (main applies a patch field-wise, so a partition write that omits the row erases it), and that an SSH partition no repo names is still read. Assert a bare id whose repo the catalog registers on two hosts keeps the local workspace's unsaved dirtyDraftContent and never names the rival partition as its write target, while two SSH partitions naming one id resolve to the same winner on every boot. Seed a real Store the way shipping builds leave it: the local blob holds the worktree key with an empty list while `ssh:<targetId>` holds the real one, with a second populated SSH partition present. Publish through the IPC handler with no session argument (the path the debounced writer takes) and assert the host snapshot carries the runtime-authored tabs rather than []. Separately drive the shipping split (buildWorkspaceSessionHostSnapshots) and feed its own output back through the real boot read, pinning the write and read halves to each other rather than to a hand-built fixture: an SSH workspace with open editor files, an unsaved dirtyDraftContent and no terminal tabs must come back intact, as must one with no tabsByWorktree key at all. Export and re-import through the real projection and merge through mergeDirectSshRemoteWorkspaceSession, asserting tabs survive a publish, the next pull, and an older client publishing an empty list for them. Assert the reunited workspace routes to `ssh:<targetId>`, that a workspace the base holds tabs for is not modified, and that a contested id claimed by an SSH and a runtime host does not send the SSH rows into the rotating runtime partition.",
       "commands": [
-        "pnpm exec vitest run --config config/vitest.config.ts src/main/ipc/ssh-host-partition-session-export.test.ts src/renderer/src/lib/workspace-session-ssh-partition-round-trip.test.ts src/renderer/src/lib/workspace-session-host-contention.test.ts src/shared/workspace-session-partition-owner.test.ts"
+        "pnpm exec vitest run --config config/vitest.config.ts src/main/ipc/ssh-host-partition-session-export.test.ts src/renderer/src/lib/workspace-session-ssh-partition-round-trip.test.ts src/renderer/src/lib/workspace-session-ssh-partition-ownership.test.ts src/renderer/src/lib/workspace-session-host-contention.test.ts src/shared/workspace-session-partition-owner.test.ts"
       ],
       "testFiles": [
         "src/main/ipc/ssh-host-partition-session-export.test.ts",
         "src/renderer/src/lib/workspace-session-ssh-partition-round-trip.test.ts",
+        "src/renderer/src/lib/workspace-session-ssh-partition-ownership.test.ts",
         "src/renderer/src/lib/workspace-session-host-contention.test.ts",
         "src/shared/workspace-session-partition-owner.test.ts"
       ],
@@ -549,6 +550,18 @@
           ]
         },
         {
+          "file": "src/renderer/src/lib/workspace-session-ssh-partition-ownership.test.ts",
+          "assertions": [
+            "routes a folder workspace to the partition main writes it to",
+            "keeps a folder row out of the local partition so a save cannot erase main\u2019s copy",
+            "reads an ssh partition that only a folder workspace owns",
+            "returns adopted rows to the partition they were read from with no repo catalog",
+            "gap-fills instead of replacing, so the local workspace keeps its unsaved draft",
+            "never names the rival partition as the write target for a contested id",
+            "treats two ssh partitions naming one id as contested too"
+          ]
+        },
+        {
           "file": "src/renderer/src/lib/workspace-session-host-contention.test.ts",
           "assertions": [
             "keeps an SSH claimant out of the rotating runtime partition",
@@ -564,13 +577,13 @@
       ],
       "evidenceRuns": [
         {
-          "date": "2026-09-10",
+          "date": "2026-09-15",
           "runner": "local",
           "platform": "macos",
-          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/ipc/ssh-host-partition-session-export.test.ts src/renderer/src/lib/workspace-session-ssh-partition-round-trip.test.ts src/renderer/src/lib/workspace-session-host-contention.test.ts src/shared/workspace-session-partition-owner.test.ts",
+          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/ipc/ssh-host-partition-session-export.test.ts src/renderer/src/lib/workspace-session-ssh-partition-round-trip.test.ts src/renderer/src/lib/workspace-session-ssh-partition-ownership.test.ts src/renderer/src/lib/workspace-session-host-contention.test.ts src/shared/workspace-session-partition-owner.test.ts",
           "result": "passed",
-          "durationSeconds": 1.04,
-          "summary": "56 tests passed across 4 files, including the real Store publish, the shipping write/read split round trip, the older-client empty-publish skew direction, the contested-bare-id and empty-host-row guards, and the closed-last-terminal tombstone boundary."
+          "durationSeconds": 7.13,
+          "summary": "64 tests passed across 5 files: the real Store publish, the shipping write/read split round trip, the older-client empty-publish skew direction, the contested-bare-id and empty-host-row guards, the closed-last-terminal tombstone boundary, and the partition-ownership suite covering folder-workspace routing, the persistence-side partition census, read-source write-back, and the catalog attribution that keeps a residue partition from winning the read."
         }
       ],
       "runtimeBudget": {
@@ -591,10 +604,13 @@
       },
       "knownGaps": [
         "No live SSH host or relay is exercised; the multiplexer is faked at the request boundary.",
-        "Folder workspaces still persist to the local partition, so their half of the writer divergence in #12723 is not covered here.",
+        "The publish fallback reads only 'local' and the target's own partition, so it cannot see the local/runtime rivalry or a second SSH partition the renderer's read can. Bounded rather than closed: a key either side would judge differently is one whose repo id resolves ambiguously or to another host, and the export already publishes those to nobody.",
+        "A lingering `ssh:<targetId>` partition for a connection the user removed is now read by the census. Its rows stay in that partition rather than spilling into 'local', and the deregistered-repo residue sweep already clears repo-backed ones, but a folder workspace left behind by a removed connection is not swept.",
         "Rows stranded beside a workspace the local partition already holds terminal tabs for are deliberately not recovered, and no assertion claims they are.",
         "One-shot resurrection in the legacy-transition shape: where an older build left an empty local row while the runtime partition still holds that workspace's tabs, boot adopts them back once. Non-destructive, and non-recurrence is now asserted rather than argued - a workspace this build empties writes its empty row to the owning partition and leaves no local row behind, so there is nothing left to resurrect from.",
         "A contested bare id is gap-filled rather than replaced, so rows stranded beside a contested workspace stay stranded. Separating them needs host-qualified keys through the tab store, which is the same open gap `workspace-session-host-contention.ts` records.",
+        "A `local` row left by a repo registration the user removed, whose repo id the catalog now resolves to the SSH host alone, is neither ambiguous nor foreign, so a populated host row still replaces it - including an unsaved `dirtyDraftContent`. Unchanged from main; closing it needs host-qualified keys, the same gap `workspace-session-host-contention.ts` records.",
+        "A bare `lastVisitedAtByWorktreeId` stamp left in 'local' for a workspace now owned by an SSH partition gap-fills rather than replaces, so the workspace can keep an older Cmd+J position for one boot after the migration.",
         "`lastVisitedAtByWorktreeId` still discovers a workspace as adoptable from a recency entry alone. Harmless now that a recency row cannot replace another host's entry for the same bare id, but it means recency is a discovery trigger and no other field of its kind is."
       ],
       "promotionCriteria": [

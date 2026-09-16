@@ -88,22 +88,26 @@ function getFolderWorkspacePartitionHostId(
     : null
   const parsed = parseExecutionHostId(workspace?.executionHostId ?? group?.executionHostId)
   if (parsed) {
-    // Why ssh still answers 'local' here while a repo-backed worktree does not: boot hydration
-    // discovers SSH partitions from the repo catalog, and a folder workspace can be the only thing
-    // an SSH target owns. Routing it to `ssh:<targetId>` would strand it behind a partition no
-    // reader enumerates. A stranded folder workspace is still adopted back out of that partition
-    // when a repo does name the host; converging its writes needs a partition census first.
-    return parsed.kind === 'runtime' ? parsed.id : LOCAL_EXECUTION_HOST_ID
+    // Every non-local kind owns its own partition — the same answer main's
+    // RuntimeWorkspaceSessionController.getPreferredHostId gives for this key. Answering 'local'
+    // for an ssh host left the renderer and the runtime writing one folder workspace into two
+    // stores, which is #12723 unfixed for folder workspaces; and once the renderer began writing
+    // `ssh:<targetId>` at all, a save's field-level patch erased the folder rows main had put
+    // there. Boot reads these partitions from persistence's own census, not the repo catalog, so
+    // a target whose only workspace is a folder is no longer unenumerated.
+    return parsed.id
   }
   if (workspace && group) {
     // Why: once the folder and group catalogs are both known, a missing runtime
     // owner is authoritative local/SSH persistence, not a startup gap.
     return LOCAL_EXECUTION_HOST_ID
   }
-  const restoredHostId = getRestoredRuntimeHostId(
-    state.restoredRuntimeHostIdByWorkspaceSessionKey,
-    key
-  )
+  // Why the read source outranks the runtime-only map here: a folder workspace's partition can be
+  // any kind now, and a boot that has not hydrated the folder catalog must not spill an ssh-owned
+  // row into 'local' on the first save.
+  const restoredHostId =
+    state.contestedPrimaryHostBySessionKey?.[key] ??
+    getRestoredRuntimeHostId(state.restoredRuntimeHostIdByWorkspaceSessionKey, key)
   return restoredHostId ?? LOCAL_EXECUTION_HOST_ID
 }
 

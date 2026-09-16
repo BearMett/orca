@@ -33,10 +33,15 @@ import {
  * Adoption is told which session keys the read found **contested**. Every rule below rests on the
  * premise that `local` and `ssh:<targetId>` are one workspace written twice — and a bare
  * `repoId::path` id claimed by more than one host is exactly where that premise is false. The
- * contention split cannot see it, because ssh slices are deliberately kept out of the claimant set,
- * so the verdict is passed in instead: a contested key may still be gap-filled, never replaced.
+ * contention split cannot answer it, because ssh slices are deliberately kept out of its claimant
+ * set, so the caller reaches the verdict itself — from the repo catalog and from the other
+ * partitions it read — and passes it in: a contested key may still be gap-filled, never replaced.
  * Without that, an SSH workspace's rows overwrote a different workspace's rows under the same id,
  * and routing then wrote them into that workspace's own partition.
+ *
+ * `adoptedWorkspaceIds` reports which workspaces came out of `host` uncontested. The write path
+ * routes those back to that partition directly, so a row does not depend on a repo catalog naming
+ * the host before it can be returned to where it was read from.
  *
  * The one thing the base keeps unconditionally is a workspace it holds **terminal tabs** for. That
  * is the live copy the user is looking at, and merging a stale partition into it would re-add tabs
@@ -86,20 +91,39 @@ function workspacesTheBaseOwns(base: WorkspaceSessionState): Set<string> {
   return owned
 }
 
+/**
+ * Every workspace a partition names in any scoped field.
+ *
+ * Exported because the caller has to ask the repo catalog about the same set before adoption runs:
+ * a `worktreeKeyed` sweep alone misses an id a partition names only through
+ * `browserPagesByWorkspace`, a sleeping-agent record or `activeWorktreeIdsOnShutdown`, and those
+ * are adopted just like the rest.
+ */
+export function workspaceIdsNamedByPartition(host: WorkspaceSessionState): Set<string> {
+  return collectWorkspaceIds(host, () => false)
+}
+
 /** Every workspace the host partition names in any scoped field, minus the base's live copies. */
 function adoptableWorkspaceIds(
   base: WorkspaceSessionState,
   host: WorkspaceSessionState
 ): Set<string> {
   const owned = workspacesTheBaseOwns(base)
-  const adoptable = new Set<string>()
+  return collectWorkspaceIds(host, (workspaceId) => owned.has(workspaceId))
+}
+
+function collectWorkspaceIds(
+  host: WorkspaceSessionState,
+  skip: (workspaceId: string) => boolean
+): Set<string> {
+  const collected = new Set<string>()
   const consider = (value: string | null | undefined): void => {
     if (!value) {
       return
     }
     const workspaceId = normalizeWorkspaceSessionKeyToWorkspaceId(value)
-    if (!owned.has(workspaceId)) {
-      adoptable.add(workspaceId)
+    if (!skip(workspaceId)) {
+      collected.add(workspaceId)
     }
   }
   for (const field of SESSION_FIELDS) {
@@ -137,7 +161,7 @@ function adoptableWorkspaceIds(
         break
     }
   }
-  return adoptable
+  return collected
 }
 
 /**
@@ -186,21 +210,39 @@ function adoptRecord(
 }
 
 export type StrandedPartitionAdoptionOptions = {
-  /** Session keys the contention split found claimed by more than one partition. */
+  /** Session keys the read found claimed by more than one partition. */
   contestedSessionKeys?: ReadonlySet<string>
+  /**
+   * Keys the repo catalog positively attributes to a DIFFERENT host: residue this partition holds
+   * but does not own. Not adopted at all — gap-filling a stale row would put it in front of the
+   * live one and then route it into the live partition on the next write. Nothing is deleted; the
+   * rows stay where they are, which is the leak direction the boundary doc asks for.
+   */
+  foreignSessionKeys?: ReadonlySet<string>
 }
+
+export type StrandedPartitionAdoption = {
+  session: WorkspaceSessionState
+  /** Bare workspace ids whose rows this partition owns outright, so the write returns them here. */
+  adoptedWorkspaceIds: ReadonlySet<string>
+}
+
+const NOTHING_ADOPTED: ReadonlySet<string> = new Set<string>()
 
 export function adoptStrandedHostPartitionSession(
   base: WorkspaceSessionState,
   host: WorkspaceSessionState | null | undefined,
   options: StrandedPartitionAdoptionOptions = {}
-): WorkspaceSessionState {
+): StrandedPartitionAdoption {
   if (!host) {
-    return base
+    return { session: base, adoptedWorkspaceIds: NOTHING_ADOPTED }
   }
   const adoptable = adoptableWorkspaceIds(base, host)
+  for (const key of options.foreignSessionKeys ?? []) {
+    adoptable.delete(normalizeWorkspaceSessionKeyToWorkspaceId(key))
+  }
   if (adoptable.size === 0) {
-    return base
+    return { session: base, adoptedWorkspaceIds: NOTHING_ADOPTED }
   }
   const contested = new Set<string>()
   for (const key of options.contestedSessionKeys ?? []) {
@@ -299,5 +341,10 @@ export function adoptStrandedHostPartitionSession(
         break
     }
   }
-  return next
+  // Why contested ids are withheld: the write path would route the whole bare id here, carrying the
+  // co-claimant's rows into this host's partition — the loss the gap-fill above exists to prevent.
+  const adoptedWorkspaceIds = new Set(
+    [...adoptable].filter((workspaceId) => !contested.has(workspaceId))
+  )
+  return { session: next, adoptedWorkspaceIds }
 }

@@ -11,6 +11,7 @@ import {
 import type { WorkspaceSessionState } from '../../shared/workspace-session-state-types'
 import { createRepoRowExecutionHostLookup } from '../../shared/worktree-execution-host-resolution'
 import {
+  createWorktreeOwnerResolver,
   createWorktreeTargetResolver,
   exportSessionForTarget,
   persistedSessionForTarget
@@ -222,10 +223,13 @@ export function registerRemoteWorkspaceHandlers(
         return []
       }
 
-      // One repo read, and ownership resolutions shared across targets: neither depends on the target.
-      const resolveWorktreeTarget = createWorktreeTargetResolver(
+      // One repo read, and ownership resolutions shared across targets: neither depends on the
+      // target. The publish fallback's catalog attribution reads the same lookup for the same
+      // reason — building it per target re-hydrates every repo row once per connected host.
+      const resolveWorktreeOwner = createWorktreeOwnerResolver(
         createRepoRowExecutionHostLookup(store.getRepos())
       )
+      const resolveWorktreeTarget = createWorktreeTargetResolver(resolveWorktreeOwner)
       const results = await Promise.all(
         targets.map(async (target) => {
           // Why: each target has its own revision stream. Keep same-target
@@ -233,7 +237,7 @@ export function registerRemoteWorkspaceHandlers(
           const session = exportSessionForTarget(
             resolveWorktreeTarget,
             target.id,
-            args.session ?? persistedSessionForTarget(store, target.id)
+            args.session ?? persistedSessionForTarget(store, target.id, resolveWorktreeOwner)
           )
           const result = await queueRemoteWorkspacePatch(target.id, async () => {
             const current =

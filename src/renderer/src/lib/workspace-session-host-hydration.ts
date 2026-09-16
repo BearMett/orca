@@ -6,7 +6,15 @@ import {
   parseExecutionHostId,
   type ExecutionHostId
 } from '../../../shared/execution-host'
-import { adoptStrandedHostPartitionSession } from '../../../shared/workspace-session-stranded-partition-adoption'
+import { getRepoIdFromWorktreeId } from '../../../shared/worktree/id'
+import {
+  createRepoRowExecutionHostLookup,
+  resolveWorktreeExecutionHost
+} from '../../../shared/worktree-execution-host-resolution'
+import {
+  adoptStrandedHostPartitionSession,
+  workspaceIdsNamedByPartition
+} from '../../../shared/workspace-session-stranded-partition-adoption'
 import {
   mergeWorkspaceSessionsWithHostShadow,
   normalizeWorkspaceSessionKeyToWorktreeId
@@ -15,6 +23,11 @@ import { nonLocalHostSessionEntries, type HostSessionSlices } from './workspace-
 
 type SessionReadApi = {
   get: (hostId?: ExecutionHostId) => Promise<WorkspaceSessionState>
+  /** Every partition persistence actually holds. Boot used to infer the set from the repo catalog
+   *  alone, which cannot see an SSH target whose only workspace is a folder — that partition was
+   *  written by the runtime and then read by nobody. Optional so a renderer paired with an older
+   *  main still boots on the catalog-derived set. */
+  listHostIds?: () => Promise<ExecutionHostId[]>
 }
 
 export type WorkspaceSessionHostRead = {
@@ -136,7 +149,7 @@ function listKnownPartitionHostIds(
  *  each one and falls back to defaults on the main side. */
 export async function fetchWorkspaceSessionFromHosts(
   api: SessionReadApi,
-  repos: readonly Pick<Repo, 'connectionId' | 'executionHostId'>[],
+  repos: readonly Pick<Repo, 'id' | 'connectionId' | 'executionHostId'>[],
   additionalRuntimeHostIds: readonly ExecutionHostId[] = []
 ): Promise<WorkspaceSessionState> {
   return (await fetchWorkspaceSessionWithRuntimeHostOwners(api, repos, additionalRuntimeHostIds))
@@ -145,7 +158,7 @@ export async function fetchWorkspaceSessionFromHosts(
 
 export async function fetchWorkspaceSessionWithRuntimeHostOwners(
   api: SessionReadApi,
-  repos: readonly Pick<Repo, 'connectionId' | 'executionHostId'>[],
+  repos: readonly Pick<Repo, 'id' | 'connectionId' | 'executionHostId'>[],
   additionalRuntimeHostIds: readonly ExecutionHostId[] = []
 ): Promise<WorkspaceSessionHostRead> {
   const readPartition = async (hostId: ExecutionHostId): Promise<WorkspaceSessionState | null> => {
@@ -165,8 +178,11 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
     ...listKnownRuntimeHostIds(repos),
     ...additionalRuntimeHostIds
   ])
-  const sshHostIds = listKnownSshHostIds(repos)
-  const [, sshSlices] = await Promise.all([
+  const sshHostIds = new Set<ExecutionHostId>(listKnownSshHostIds(repos))
+  for (const hostId of await listPersistedSshPartitionHostIds(api)) {
+    sshHostIds.add(hostId)
+  }
+  const [, sshPartitions] = await Promise.all([
     Promise.all(
       [...runtimeHostIds].map(async (hostId) => {
         const slice = await readPartition(hostId)
@@ -175,7 +191,11 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
         }
       })
     ),
-    Promise.all(sshHostIds.map((hostId) => readPartition(hostId)))
+    Promise.all(
+      // Sorted so two SSH partitions naming one bare id resolve the same way on every boot; the
+      // repo catalog's order is not stable across repo add/remove.
+      [...sshHostIds].sort().map(async (hostId) => [hostId, await readPartition(hostId)] as const)
+    )
   ])
   const merged = mergeWorkspaceSessionsWithHostShadow(slices)
   // Why the ssh partitions stay out of `slices`: the contention split reads two slices holding one
@@ -184,14 +204,28 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
   // — and a workspace the merged session has no tabs for is adopted rather than read as a
   // deletion (#12721). Routing sends the reunited rows back to the owning partition.
   let session = merged.session
-  // Why the contested keys travel with the slice: the split parks a co-claimant's rows so the
-  // primary's write cannot erase them, but ssh slices are kept out of that claimant set on purpose.
-  // Adoption is the one place an ssh row meets a bare id another host also claims, and it cannot
-  // ask — so the verdict the merge already reached is handed to it.
-  for (const slice of sshSlices) {
-    session = adoptStrandedHostPartitionSession(session, slice, {
-      contestedSessionKeys: merged.contestedSessionKeys
+  // Why the merge's verdict is widened here: it arbitrates only the slices it was given, and the
+  // ssh ones are kept out of that claimant set on purpose. Adoption is the one place an ssh row
+  // meets a bare id another host also claims.
+  const attribution = sshPartitionCatalogAttribution(
+    repos,
+    sshPartitions,
+    merged.contestedSessionKeys
+  )
+  const primaryHostBySessionKey = { ...merged.primaryHostBySessionKey }
+  for (const [hostId, slice] of sshPartitions) {
+    const adoption = adoptStrandedHostPartitionSession(session, slice, {
+      contestedSessionKeys: attribution.contestedSessionKeys,
+      foreignSessionKeys: attribution.foreignSessionKeysByHostId.get(hostId)
     })
+    session = adoption.session
+    for (const workspaceId of adoption.adoptedWorkspaceIds) {
+      // Why this overrides the merge's answer: the merge saw only the leftover half in 'local' and
+      // named it the owner. These rows came out of the partition that owns them, and routing has to
+      // return them there even on a boot whose repo catalog cannot name the host yet — otherwise
+      // the write moves them back into 'local' and re-strands them (#12723).
+      primaryHostBySessionKey[workspaceId] = hostId
+    }
   }
   return {
     session,
@@ -199,6 +233,99 @@ export async function fetchWorkspaceSessionWithRuntimeHostOwners(
     // still name its host as the owner, or startup builds runtime placeholders for a local row.
     runtimeHostIdByWorkspaceSessionKey: buildRuntimeHostIdByWorkspaceSessionKey(merged.slices),
     contestedHostWorkspaceSessions: merged.shadow,
-    contestedPrimaryHostBySessionKey: merged.primaryHostBySessionKey
+    contestedPrimaryHostBySessionKey: primaryHostBySessionKey
   }
+}
+
+/** SSH partitions persistence holds, whether or not a repo still names the target. Fail-soft: an
+ *  older main without the channel leaves the catalog-derived set as the whole answer. */
+async function listPersistedSshPartitionHostIds(api: SessionReadApi): Promise<ExecutionHostId[]> {
+  if (!api.listHostIds) {
+    return []
+  }
+  try {
+    return (await api.listHostIds()).filter(
+      (hostId) => parseExecutionHostId(hostId)?.kind === 'ssh'
+    )
+  } catch (err) {
+    console.warn('[session] skipping the persisted partition census:', err)
+    return []
+  }
+}
+
+/**
+ * What the repo catalog says about the workspaces each SSH partition names.
+ *
+ * `contested` — "one workspace written twice" is false, so adoption may gap-fill but never replace.
+ * Three sources, none of which is bare co-presence in 'local' and `ssh:<targetId>`; that pair IS the
+ * shape the repair exists for, and reading it as a collision disables the repair:
+ *  - the local/runtime rivalry the contention split already arbitrated;
+ *  - two SSH partitions both naming the id, which that split never sees;
+ *  - a repo id the catalog registers on more than one host.
+ *
+ * `foreign` — the catalog positively resolves the id to a different host. That is residue, not a
+ * rival claim: adopting it would show a stale row in front of the live one and then route it into
+ * the live partition. The same "positively says otherwise" rule `catalogReattributedAwayFrom` uses
+ * — an id the catalog cannot speak for is neither contested nor foreign, so a boot whose repos have
+ * not hydrated still reunites its rows.
+ */
+function sshPartitionCatalogAttribution(
+  repos: readonly Pick<Repo, 'id' | 'connectionId' | 'executionHostId'>[],
+  sshPartitions: readonly (readonly [ExecutionHostId, WorkspaceSessionState | null])[],
+  mergedContested: ReadonlySet<string>
+): {
+  contestedSessionKeys: Set<string>
+  foreignSessionKeysByHostId: Map<ExecutionHostId, Set<string>>
+} {
+  const contestedSessionKeys = new Set(mergedContested)
+  const foreignSessionKeysByHostId = new Map<ExecutionHostId, Set<string>>()
+  const repoLookup = createRepoRowExecutionHostLookup(repos)
+  const ownedByHostId = new Map<ExecutionHostId, Set<string>>()
+  for (const [hostId, slice] of sshPartitions) {
+    if (!slice) {
+      continue
+    }
+    const foreign = new Set<string>()
+    const owned = new Set<string>()
+    for (const workspaceId of workspaceIdsNamedByPartition(slice)) {
+      const repoId = getRepoIdFromWorktreeId(workspaceId)
+      const resolution = repoId
+        ? resolveWorktreeExecutionHost(repoLookup, { repoId, hostId: null })
+        : null
+      if (resolution?.kind === 'resolved' && resolution.hostId !== hostId) {
+        foreign.add(workspaceId)
+        continue
+      }
+      if (resolution?.kind === 'unresolved' && resolution.reason === 'ambiguous') {
+        contestedSessionKeys.add(workspaceId)
+      }
+      owned.add(workspaceId)
+    }
+    if (foreign.size > 0) {
+      foreignSessionKeysByHostId.set(hostId, foreign)
+    }
+    ownedByHostId.set(hostId, owned)
+  }
+  // Why co-presence is asked only of the ids left after the catalog has spoken: one partition
+  // holding residue the catalog attributes elsewhere is a single owner plus a leftover, not a
+  // collision. Counting the leftover would withhold the real owner's rows from the write.
+  for (const workspaceId of sessionKeysHeldByMultiplePartitionSets([...ownedByHostId.values()])) {
+    contestedSessionKeys.add(workspaceId)
+  }
+  return { contestedSessionKeys, foreignSessionKeysByHostId }
+}
+
+/** Ids that appear in more than one of these per-partition sets. */
+function sessionKeysHeldByMultiplePartitionSets(sets: readonly ReadonlySet<string>[]): Set<string> {
+  const held = new Set<string>()
+  const contested = new Set<string>()
+  for (const keys of sets) {
+    for (const key of keys) {
+      if (held.has(key)) {
+        contested.add(key)
+      }
+      held.add(key)
+    }
+  }
+  return contested
 }

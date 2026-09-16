@@ -8,7 +8,11 @@ import { normalizeStoredTaskSourceContext } from '../../../shared/task-source-co
 import { normalizeWorkspaceLinkedItem } from '../../../shared/workspace-linked-item'
 import { isWorkspaceLinkedItemSourceContextMatch } from '../../../shared/workspace-linked-item-source-context'
 import { folderWorkspaceKey } from '../../../shared/workspace-scope'
-import { removeWorkspaceSessionOwner } from './session-owner-removal'
+import { LOCAL_EXECUTION_HOST_ID, toSshExecutionHostId } from '../../../shared/execution-host'
+import {
+  removeWorkspaceSessionOwner,
+  workspaceSessionPartitionIdsForHost
+} from './session-owner-removal'
 
 export type FolderWorkspaceMutationOperations = {
   state: PersistedState
@@ -209,16 +213,40 @@ export class FolderWorkspacePersistenceOperations {
 
   removeFolderWorkspace(id: string): boolean {
     const before = this.state.folderWorkspaces?.length ?? 0
+    // Captured before the filter: it names the partition this workspace's rows live in. Read the
+    // same way RuntimeWorkspaceSessionController.getPreferredHostId reads it — an explicit host
+    // wins, and the connection id is the legacy fallback for rows written before host ids existed.
+    const removed = (this.state.folderWorkspaces ?? []).find((workspace) => workspace.id === id)
+    const removedHostId =
+      removed?.executionHostId ??
+      (removed?.connectionId ? toSshExecutionHostId(removed.connectionId) : null)
     this.state.folderWorkspaces = (this.state.folderWorkspaces ?? []).filter(
       (workspace) => workspace.id !== id
     )
     if ((this.state.folderWorkspaces?.length ?? 0) === before) {
       return false
     }
+    const ownerKey = folderWorkspaceKey(id)
     this.state.workspaceSession = removeWorkspaceSessionOwner(
       this.state.workspaceSession,
-      folderWorkspaceKey(id)
+      ownerKey
     )!
+    // Why every partition and not just the local blob: a folder workspace on a non-local host
+    // persists into that host's partition, and boot enumerates partitions from persistence itself
+    // rather than from the repo catalog. A row left behind in `ssh:<targetId>` would be adopted
+    // back on the next launch as a workspace that no longer exists.
+    for (const hostId of workspaceSessionPartitionIdsForHost(removedHostId)) {
+      if (hostId === LOCAL_EXECUTION_HOST_ID) {
+        continue
+      }
+      const partition = this.state.workspaceSessionsByHostId?.[hostId]
+      if (partition) {
+        this.state.workspaceSessionsByHostId = {
+          ...this.state.workspaceSessionsByHostId,
+          [hostId]: removeWorkspaceSessionOwner(partition, ownerKey)!
+        }
+      }
+    }
     this.removeWorkspaceLineageForFolderParent(id)
     this.pruneMobileClientTabSelections((worktreeId) => worktreeId === folderWorkspaceKey(id))
     this.scheduleSave()
