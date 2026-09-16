@@ -199,6 +199,25 @@ describe('remote runtime connect bound', () => {
     expect(message).not.toContain('token=abc')
   })
 
+  // Why: `isRemoteTerminalGoneMessage` in the pty transport substring-matches these tokens and
+  // runs BEFORE the recoverable gate, and WHATWG URL accepts `_` in a host. An endpoint could
+  // otherwise turn loss of contact into a terminal-gone verdict.
+  it('never lets the endpoint smuggle a terminal-gone token into the message', () => {
+    for (const host of ['terminal_gone.example', 'terminal_exited.example', 'no_connected_pty']) {
+      const message = remoteRuntimeConnectFailureMessage(
+        handshakeTimeoutError(),
+        `ws://${host}:6768`
+      )
+      expect(message).not.toMatch(/terminal_exited|terminal_gone|no_connected_pty/)
+      // Still reads as a recoverable connect failure, so the pane keeps retrying.
+      expect(isRecoverableRemoteRuntimeConnectionError({ message })).toBe(true)
+    }
+    // A well-formed host is still shown, so the redaction is not blanket.
+    expect(
+      remoteRuntimeConnectFailureMessage(handshakeTimeoutError(), 'ws://[fd7a:115c:a1e0::1]:6768')
+    ).toContain('[fd7a:115c:a1e0::1]:6768')
+  })
+
   // Why: `ws` and `net` gate on a truthy timeout, so 0 would leave the connect unbounded.
   it('refuses a non-positive or non-finite bound and keeps the production default', () => {
     for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
