@@ -11,6 +11,7 @@ import remarkFrontmatter from 'remark-frontmatter'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import { remarkMarkdownDocLinks } from './markdown-doc-links'
+import { protectNonMathDollars } from './markdown-pandoc-math'
 import { markdownPreviewUrlTransform } from './markdown-preview-url-transform'
 
 const markdownPreviewSanitizeSchema = {
@@ -84,7 +85,7 @@ export const MarkdownPreviewBody = memo(function MarkdownPreviewBody({
       remarkPlugins={MARKDOWN_REMARK_PLUGINS}
       rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
     >
-      {content}
+      {protectNonMathDollars(content)}
     </Markdown>
   )
 })
