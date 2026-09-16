@@ -14,8 +14,8 @@ import {
 // Monaco's own gutter gesture (select this line) is pre-empted rather than fought after the fact.
 // It registers its press handler as a bubble-phase `pointerdown` on the view DOM node — the very
 // node `editor.getDomNode()` returns — so a capture-phase listener on that same node still runs
-// first for any descendant target (line numbers, glyph margin, our "+"), and stopPropagation
-// there keeps the event from ever reaching Monaco.
+// first for any descendant target (line numbers, our "+"), and stopPropagation there keeps the
+// event from ever reaching Monaco.
 
 export type DiffCommentRangeDragEditor = Pick<
   monacoEditor.ICodeEditor,
@@ -44,12 +44,15 @@ export type DiffCommentRangeDragHandle = {
   dispose: () => void
   /** The range of the open composer; keeps the band lit while the note is being written. */
   setPendingRange: (range: DiffCommentLineRange | null) => void
+  /** True while a press owns the band, so keyboard paths can stand aside instead of racing it. */
+  isDragging: () => boolean
 }
 
+// Line numbers only: the rest of the gutter carries Monaco's own press handlers (fold chevrons
+// live in GUTTER_LINE_DECORATIONS), and a capture-phase stopPropagation here would swallow them.
+// The "+" press needs no entry — it resolves through the button, not a Monaco target.
 const GUTTER_PRESS_TARGET_TYPES: ReadonlySet<monacoEditor.MouseTargetType> = new Set([
-  monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN,
-  monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS,
-  monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS
+  monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS
 ])
 
 // Far enough into the text column to clear the gutter, close enough to stay on every line.
@@ -329,7 +332,8 @@ export function installDiffCommentRangeDrag({
       }
       pendingRange = range
       repaint()
-    }
+    },
+    isDragging: () => drag !== null
   }
 }
 

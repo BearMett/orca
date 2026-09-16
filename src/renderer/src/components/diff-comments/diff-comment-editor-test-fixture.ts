@@ -38,6 +38,8 @@ type FakeEditorOptions = {
    * Monaco reports no position for a point over a DOM node it does not own.
    */
   deadColumn?: { fromX: number; toX: number }
+  /** MouseTargetType the hit-test reports, for the gesture's gutter-target filter. */
+  gutterTargetType?: MonacoEditor.MouseTargetType
 }
 
 export function createFakeDiffCommentEditor(
@@ -120,7 +122,10 @@ export function createFakeDiffCommentEditor(
       const lineNumber = lineAtClientY(clientY)
       return lineNumber === null
         ? null
-        : { type: 3 /* GUTTER_LINE_NUMBERS */, position: { lineNumber } }
+        : {
+            type: options.gutterTargetType ?? 3 /* GUTTER_LINE_NUMBERS */,
+            position: { lineNumber }
+          }
     },
     onMouseMove: (listener: (e: { target: { position: { lineNumber: number } } }) => void) => {
       mouseMoveListeners.push(listener)

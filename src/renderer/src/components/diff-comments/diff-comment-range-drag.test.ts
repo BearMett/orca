@@ -6,6 +6,8 @@ import {
   FAKE_EDITOR_TOP_PX,
   type FakeDiffCommentEditor
 } from './diff-comment-editor-test-fixture'
+import * as monaco from 'monaco-editor'
+import type { editor as monacoEditor } from 'monaco-editor'
 import { getGutterPressLine, installDiffCommentRangeDrag } from './diff-comment-range-drag'
 import type { DiffCommentLineRange } from './diff-comment-line-range'
 
@@ -81,11 +83,13 @@ function mountDrag(
     resolvePressLine?: (event: PointerEvent) => number | null
     unresolvableLines?: readonly number[]
     deadColumn?: { fromX: number; toX: number }
+    gutterTargetType?: monacoEditor.MouseTargetType
   } = {}
 ): DragHarness {
   const fake = createFakeDiffCommentEditor({
     unresolvableLines: options.unresolvableLines,
-    deadColumn: options.deadColumn
+    deadColumn: options.deadColumn,
+    gutterTargetType: options.gutterTargetType
   })
   const commits: DiffCommentLineRange[] = []
   const dragStates: boolean[] = []
@@ -328,6 +332,68 @@ describe('diff comment gutter range drag', () => {
 
     expect(drag.commits).toEqual([{ startLine: 7, endLine: 9 }])
     drag.handle.dispose()
+  })
+
+  // Keyboard paths read this to stand aside; the drag range isn't committed until release.
+  it('reports the drag as owning the band from press to release', () => {
+    const drag = mountDrag()
+    expect(drag.handle.isDragging()).toBe(false)
+
+    drag.pressLine(12)
+    expect(drag.handle.isDragging()).toBe(true)
+    drag.moveToLine(17)
+    pumpFrame()
+    expect(drag.handle.isDragging()).toBe(true)
+
+    drag.release()
+    expect(drag.handle.isDragging()).toBe(false)
+    drag.handle.dispose()
+  })
+})
+
+describe('diff comment gutter range drag target types', () => {
+  // Monaco's folding controller toggles chevrons from its own mousedown on GUTTER_LINE_DECORATIONS,
+  // and the markdown annotations editor installs this drag with no commentable-line set — so
+  // claiming anything but the line numbers would eat the fold press on every line there.
+  function pressGutter(drag: DragHarness): Event {
+    const event = new Event('pointerdown', { bubbles: true, cancelable: true })
+    Object.assign(event, {
+      clientX: 30,
+      clientY: drag.fake.clientYForLine(11),
+      button: 0,
+      pointerType: 'mouse',
+      pointerId: 1
+    })
+    drag.fake.domNode.dispatchEvent(event)
+    return event
+  }
+
+  it('takes a press on the line numbers', () => {
+    const drag = mountDrag({
+      gutterTargetType: monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS
+    })
+
+    expect(pressGutter(drag).defaultPrevented).toBe(true)
+    drag.release()
+
+    expect(drag.commits).toEqual([{ startLine: 11, endLine: 11 }])
+    drag.handle.dispose()
+  })
+
+  it('leaves the rest of the gutter to Monaco', () => {
+    for (const type of [
+      monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS,
+      monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN
+    ]) {
+      const drag = mountDrag({ gutterTargetType: type })
+
+      expect(pressGutter(drag).defaultPrevented).toBe(false)
+      drag.release()
+
+      expect(drag.commits).toEqual([])
+      expect(paintedRange(drag.fake)).toBeNull()
+      drag.handle.dispose()
+    }
   })
 })
 

@@ -19,6 +19,12 @@ type LineSelection = {
   endColumn: number
 }
 
+/** Monaco's `Selection`: ordered bounds plus the anchor/active endpoint the user dragged from. */
+type DirectionalLineSelection = LineSelection & {
+  selectionStartLineNumber: number
+  positionLineNumber: number
+}
+
 export function orderLineRange(anchorLine: number, focusLine: number): DiffCommentLineRange {
   return {
     startLine: Math.min(anchorLine, focusLine),
@@ -78,6 +84,14 @@ export function getSelectionEndLine(selection: LineSelection): number {
   return selection.endLineNumber
 }
 
-export function getSelectionLineRange(selection: LineSelection): DiffCommentLineRange {
-  return orderLineRange(selection.startLineNumber, getSelectionEndLine(selection))
+// Why: `startLineNumber`/`endLineNumber` are sorted, so they lose which end the user dragged
+// from — and clamping needs the anchor, or an upward selection clamps into the wrong hunk.
+export function getSelectionAnchorFocus(selection: DirectionalLineSelection): {
+  anchorLine: number
+  focusLine: number
+} {
+  const endLine = getSelectionEndLine(selection)
+  return selection.positionLineNumber < selection.selectionStartLineNumber
+    ? { anchorLine: endLine, focusLine: selection.positionLineNumber }
+    : { anchorLine: selection.selectionStartLineNumber, focusLine: endLine }
 }

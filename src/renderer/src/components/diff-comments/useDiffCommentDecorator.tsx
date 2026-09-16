@@ -166,8 +166,11 @@ export function useDiffCommentDecorator({
       editor,
       commentableLineSet,
       // The composer consumes the chord itself once open (DiffCommentPopover's guard); claiming
-      // it here as well would remount the composer over the user's draft.
-      isComposerOpen: () => pendingCommentRangeRef.current !== null,
+      // it here as well would remount the composer over the user's draft. A live gutter drag owns
+      // the band the same way, and its range isn't committed yet — opening from the stale editor
+      // selection would remount the composer the moment the press lands.
+      isComposerOpen: () =>
+        pendingCommentRangeRef.current !== null || overlayRef.current?.isDragging() === true,
       onOpenComposer: (args) => {
         // Claim synchronously so a second chord in the same event turn cannot open another draft
         // before React commits the parent state update.

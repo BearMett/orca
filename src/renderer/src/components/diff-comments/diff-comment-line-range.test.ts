@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   areLineRangesEqual,
   clampFocusLineToCommentable,
-  getSelectionLineRange,
+  getSelectionAnchorFocus,
   orderLineRange,
   toDiffCommentLineTarget
 } from './diff-comment-line-range'
@@ -63,38 +63,70 @@ describe('clampFocusLineToCommentable', () => {
   })
 })
 
-describe('getSelectionLineRange', () => {
+describe('getSelectionAnchorFocus', () => {
   it('excludes a trailing line the selection only touches at column 1', () => {
     expect(
-      getSelectionLineRange({
+      getSelectionAnchorFocus({
         startLineNumber: 4,
         startColumn: 3,
         endLineNumber: 7,
-        endColumn: 1
+        endColumn: 1,
+        selectionStartLineNumber: 4,
+        positionLineNumber: 7
       })
-    ).toEqual({ startLine: 4, endLine: 6 })
+    ).toEqual({ anchorLine: 4, focusLine: 6 })
   })
 
   it('keeps the last line when the selection reaches into it', () => {
     expect(
-      getSelectionLineRange({
+      getSelectionAnchorFocus({
         startLineNumber: 4,
         startColumn: 3,
         endLineNumber: 7,
-        endColumn: 5
+        endColumn: 5,
+        selectionStartLineNumber: 4,
+        positionLineNumber: 7
       })
-    ).toEqual({ startLine: 4, endLine: 7 })
+    ).toEqual({ anchorLine: 4, focusLine: 7 })
   })
 
   it('reads a bare cursor as its own line', () => {
     expect(
-      getSelectionLineRange({
+      getSelectionAnchorFocus({
         startLineNumber: 4,
         startColumn: 1,
         endLineNumber: 4,
-        endColumn: 1
+        endColumn: 1,
+        selectionStartLineNumber: 4,
+        positionLineNumber: 4
       })
-    ).toEqual({ startLine: 4, endLine: 4 })
+    ).toEqual({ anchorLine: 4, focusLine: 4 })
+  })
+
+  it('keeps the anchor at the bottom of an upward selection', () => {
+    expect(
+      getSelectionAnchorFocus({
+        startLineNumber: 12,
+        startColumn: 2,
+        endLineNumber: 41,
+        endColumn: 6,
+        selectionStartLineNumber: 41,
+        positionLineNumber: 12
+      })
+    ).toEqual({ anchorLine: 41, focusLine: 12 })
+  })
+
+  it('drops the column-1 trailing line from an upward selection anchor', () => {
+    expect(
+      getSelectionAnchorFocus({
+        startLineNumber: 12,
+        startColumn: 2,
+        endLineNumber: 41,
+        endColumn: 1,
+        selectionStartLineNumber: 41,
+        positionLineNumber: 12
+      })
+    ).toEqual({ anchorLine: 40, focusLine: 12 })
   })
 })
 

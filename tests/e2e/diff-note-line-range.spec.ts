@@ -56,19 +56,19 @@ async function seedDiffFile(page: Page, worktreeId: string, relative: string): P
 
 // Centre of a line's number cell — the column the "+" lives in and the gesture starts from.
 async function gutterPoint(page: Page, lineNumber: number): Promise<{ x: number; y: number }> {
-  const point = await page.evaluate((line: string) => {
+  const point = await page.evaluate((lineNumber: number) => {
     const editor = document.querySelector('.monaco-editor.modified-in-monaco-diff-editor')
     if (!editor) {
       return null
     }
     for (const cell of editor.querySelectorAll('.margin .line-numbers')) {
-      if (cell.textContent?.trim() === line) {
+      if (Number.parseInt(cell.textContent?.trim() ?? '', 10) === lineNumber) {
         const rect = cell.getBoundingClientRect()
         return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) }
       }
     }
     return null
-  }, String(lineNumber))
+  }, lineNumber)
   if (!point) {
     throw new Error(`line ${lineNumber} is not rendered in the modified gutter`)
   }
@@ -169,6 +169,41 @@ test.describe('Diff note line range', () => {
     await expect(card).toContainText('lines 4-9')
     // The draft band belongs to the composer, so it clears with it.
     await expect(orcaPage.locator(BAND)).toHaveCount(0)
+  })
+
+  // Bottom-to-top: the anchor is the lower line, so the committed range only reads in document
+  // order if the drag keeps anchor and focus apart instead of sorting them as it goes.
+  test('dragging the gutter upward commits the same range as dragging down', async ({
+    orcaPage
+  }) => {
+    const worktreeId = await waitForActiveWorktree(orcaPage)
+    await seedDiffFile(orcaPage, worktreeId, 'src/diff-note-range-drag-up.ts')
+
+    const from = await gutterPoint(orcaPage, 9)
+    const to = await gutterPoint(orcaPage, 4)
+
+    await orcaPage.mouse.move(from.x, from.y)
+    await orcaPage.mouse.down()
+    await expect(orcaPage.locator(BAND)).toHaveCount(1)
+
+    await orcaPage.mouse.move(to.x, (from.y + to.y) / 2)
+    await orcaPage.mouse.move(to.x, to.y)
+    await expect(
+      orcaPage.locator(BAND),
+      'the band did not grow upward while the button was held'
+    ).toHaveCount(6)
+
+    await orcaPage.mouse.up()
+
+    await expect(orcaPage.locator(COMPOSER_LABEL)).toHaveText('Lines 4-9')
+    expect(await orcaPage.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('')
+
+    await submitNote(orcaPage, 'Dragged bottom to top.')
+
+    expect(await readNotes(orcaPage, worktreeId)).toEqual([
+      { startLine: 4, lineNumber: 9, body: 'Dragged bottom to top.' }
+    ])
+    await expect(orcaPage.locator('.orca-diff-comment-card').first()).toContainText('lines 4-9')
   })
 
   // The gesture that used to collapse to a single line: the press starts on the "+", a node

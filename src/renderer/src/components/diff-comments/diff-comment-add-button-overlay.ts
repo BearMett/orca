@@ -26,6 +26,7 @@ type AddButtonOverlayArgs = {
 export type DiffCommentAddButtonOverlayHandle = {
   dispose: () => void
   setPendingRange: DiffCommentRangeDragHandle['setPendingRange']
+  isDragging: DiffCommentRangeDragHandle['isDragging']
 }
 
 export function installDiffCommentAddButtonOverlay({
@@ -153,6 +154,7 @@ export function installDiffCommentAddButtonOverlay({
       editorDomNode.classList.remove('orca-diff-comment-range-dragging')
       plus.remove()
     },
-    setPendingRange: rangeDrag.setPendingRange
+    setPendingRange: rangeDrag.setPendingRange,
+    isDragging: rangeDrag.isDragging
   }
 }

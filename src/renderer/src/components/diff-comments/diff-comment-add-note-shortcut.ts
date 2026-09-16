@@ -4,7 +4,8 @@ import { installEditorAddReviewNoteShortcut } from '../editor/editor-shortcuts'
 import { getDiffCommentPopoverTop } from './diff-comment-popover-position'
 import {
   clampFocusLineToCommentable,
-  getSelectionLineRange,
+  getSelectionAnchorFocus,
+  orderLineRange,
   toDiffCommentLineTarget,
   type DiffCommentLineTarget
 } from './diff-comment-line-range'
@@ -30,14 +31,16 @@ export function resolveDiffCommentShortcutTarget(
   if (!selection) {
     return null
   }
-  const range = getSelectionLineRange(selection)
-  if (commentableLineSet !== null && !commentableLineSet.has(range.startLine)) {
+  const { anchorLine, focusLine } = getSelectionAnchorFocus(selection)
+  if (commentableLineSet !== null && !commentableLineSet.has(anchorLine)) {
     return null
   }
-  return toDiffCommentLineTarget({
-    startLine: range.startLine,
-    endLine: clampFocusLineToCommentable(range.startLine, range.endLine, commentableLineSet)
-  })
+  return toDiffCommentLineTarget(
+    orderLineRange(
+      anchorLine,
+      clampFocusLineToCommentable(anchorLine, focusLine, commentableLineSet)
+    )
+  )
 }
 
 export function installDiffCommentAddNoteShortcut({
