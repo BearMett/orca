@@ -189,10 +189,11 @@ describe('scanCodexUsageFiles incremental append', () => {
     expect(second.sessions[0]?.eventCount).toBe(202)
 
     // The defect: the scanner restarts at byte 0 and re-reads the whole file.
-    // The fix reads the appended bytes plus two bounded boundary windows: one
-    // to verify the cached prefix, one to re-digest the new boundary.
+    // The fix reads the appended bytes plus three bounded windows: a head and a
+    // boundary window to verify the cached prefix, then the moved boundary to
+    // record the new resume point. The head window is carried, not re-read.
     expect(bytesReadFor(rolloutPath)).toBeLessThan(sizeBeforeAppend)
-    expect(bytesReadFor(rolloutPath)).toBeLessThanOrEqual(appendedBytes + 2 * BOUNDARY_WINDOW_BYTES)
+    expect(bytesReadFor(rolloutPath)).toBeLessThanOrEqual(appendedBytes + 3 * BOUNDARY_WINDOW_BYTES)
   })
 
   it('carries cumulative token totals across the resume boundary', async () => {
@@ -334,27 +335,58 @@ describe('scanCodexUsageFiles incremental append', () => {
     expect(second.sessions).toEqual(fromScratch.sessions)
   })
 
-  it('falls back to a full reparse when only the unhashed prefix was replaced', async () => {
-    const rolloutPath = join(sessionsDir, 'rollout-prefix-swap.jsonl')
-    // The shared suffix is longer than the hashed boundary window, so the
-    // digest cannot see the swap; only the changed inode can.
+  /** A rollout whose leading records differ but whose trailing records — more
+   *  than a boundary window of them — are byte-identical, at the same length.
+   *  The boundary digest is blind to this by construction. */
+  function prefixSwapPair(sessionId: string): { original: string; replacement: string } {
     const sharedSuffix = usageRecordRange(20, 40)
     expect(sharedSuffix.length).toBeGreaterThan(BOUNDARY_WINDOW_BYTES)
-    const original = `${sessionMeta('session-prefix')}${usageRecordRange(0, 20)}${sharedSuffix}`
-    writeFileSync(rolloutPath, original, 'utf-8')
-
-    const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(40)
-
     let swappedPrefix = ''
     for (let index = 0; index < 20; index++) {
       const minute = String(index % 60).padStart(2, '0')
       swappedPrefix += usageRecord(`2026-05-26T12:${minute}:00.000Z`, 3, index + 1)
     }
-    const replacement = `${sessionMeta('session-prefix')}${swappedPrefix}${sharedSuffix}`
+    const original = `${sessionMeta(sessionId)}${usageRecordRange(0, 20)}${sharedSuffix}`
+    const replacement = `${sessionMeta(sessionId)}${swappedPrefix}${sharedSuffix}`
     expect(replacement.length).toBe(original.length)
+    return { original, replacement }
+  }
+
+  // Rotation: the path is unlinked and recreated. `physicalFileId` cannot carry
+  // this — ext4 and overlayfs hand the new file the inode the old one freed —
+  // so the head window is what has to catch it on Linux.
+  it('falls back to a full reparse when a recreated rollout swapped its prefix', async () => {
+    const rolloutPath = join(sessionsDir, 'rollout-prefix-swap-rotated.jsonl')
+    const { original, replacement } = prefixSwapPair('session-prefix-rotated')
+    writeFileSync(rolloutPath, original, 'utf-8')
+
+    const first = await scanCodexUsageFiles([], [])
+    expect(totalTokens(first.dailyAggregates)).toBe(40)
+
     rmSync(rolloutPath)
     writeFileSync(rolloutPath, replacement, 'utf-8')
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    const fromScratch = await scanCodexUsageFiles([], [])
+    expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
+    expect(totalTokens(second.dailyAggregates)).toBe(80)
+  })
+
+  // The same swap written in place. No inode changes on any platform, so the
+  // head window is the only guard left — this is the case that was missed on
+  // macOS too, not just on Linux.
+  it('falls back to a full reparse when a prefix was rewritten in place', async () => {
+    const rolloutPath = join(sessionsDir, 'rollout-prefix-swap-in-place.jsonl')
+    const { original, replacement } = prefixSwapPair('session-prefix-in-place')
+    writeFileSync(rolloutPath, original, 'utf-8')
+
+    const first = await scanCodexUsageFiles([], [])
+    expect(totalTokens(first.dailyAggregates)).toBe(40)
+
+    const inodeBefore = statSync(rolloutPath).ino
+    writeFileSync(rolloutPath, replacement, 'utf-8')
+    // Pins why this test is not a duplicate of the rotation case above.
+    expect(statSync(rolloutPath).ino).toBe(inodeBefore)
 
     const second = await scanCodexUsageFiles([], first.processedFiles)
     const fromScratch = await scanCodexUsageFiles([], [])

@@ -135,7 +135,13 @@ export async function parseCodexUsageFile(
   const parseResumeState =
     partialTailProducedEvent || legacySourceSkipBytes > 0
       ? null
-      : await buildCodexRolloutResumeState(filePath, parsedBytes, resumeContext)
+      : await buildCodexRolloutResumeState(
+          filePath,
+          parsedBytes,
+          resumeContext,
+          // Already verified against the file at the top of this scan.
+          options.resume?.state.headDigest ?? null
+        )
 
   const appended = codexUsageAggregation.aggregate(events)
   const previous = options.resume?.previous
