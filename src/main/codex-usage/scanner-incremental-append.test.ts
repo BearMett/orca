@@ -356,27 +356,30 @@ describe('scanCodexUsageFiles incremental append', () => {
   // only the boundary window is left to notice that trailing records changed.
   it('falls back to a full reparse when the records before the offset changed', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-tail-swap.jsonl')
-    const sharedHead = `${sessionMeta('session-tail')}${usageRecordRange(0, 12)}`
+    const sharedHead = `${sessionMeta('session-tail')}${usageRecordRange(0, 20)}`
     expect(sharedHead.length).toBeGreaterThan(BOUNDARY_WINDOW_BYTES)
     let heavierTail = ''
-    for (let index = 12; index < 20; index++) {
+    for (let index = 20; index < 30; index++) {
       const minute = String(index % 60).padStart(2, '0')
       heavierTail += usageRecord(`2026-05-26T12:${minute}:00.000Z`, 3, index + 1)
     }
-    const original = `${sharedHead}${usageRecordRange(12, 20)}`
+    const original = `${sharedHead}${usageRecordRange(20, 30)}`
     const replacement = `${sharedHead}${heavierTail}`
     expect(replacement.length).toBe(original.length)
+    // The windows must be disjoint, or the head digest would span the whole
+    // prefix and this would not isolate the boundary window.
+    expect(original.length).toBeGreaterThan(2 * BOUNDARY_WINDOW_BYTES)
     writeFileSync(rolloutPath, original, 'utf-8')
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(20)
+    expect(totalTokens(first.dailyAggregates)).toBe(30)
 
     writeFileSync(rolloutPath, replacement, 'utf-8')
 
     const second = await scanCodexUsageFiles([], first.processedFiles)
     const fromScratch = await scanCodexUsageFiles([], [])
     expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
-    expect(totalTokens(second.dailyAggregates)).toBe(36)
+    expect(totalTokens(second.dailyAggregates)).toBe(50)
   })
 
   // Rotation: the path is unlinked and recreated. `physicalFileId` cannot carry
