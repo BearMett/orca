@@ -20,10 +20,11 @@ function shouldForceAutomationUsageScan(
   state: ClaudeUsagePersistedState,
   completedAt: number
 ): boolean {
-  const { lastScanCompletedAt, lastScanError } = state.scanState
-  // Why: attribution needs a scan after the run finishes, but repeated
-  // lookups after that point should not rescan all Claude transcript history.
-  return Boolean(lastScanError) || lastScanCompletedAt === null || lastScanCompletedAt < completedAt
+  const { lastScanStartedAt, lastScanCompletedAt } = state.scanState
+  // Why: attribution needs one scan attempt after the run finishes. Keying on
+  // the attempt instead of its outcome bounds this to a single forced scan per
+  // run — a persistently failing scan used to re-force on every lookup, forever.
+  return Math.max(lastScanStartedAt ?? 0, lastScanCompletedAt ?? 0) < completedAt
 }
 
 export async function resolveAutomationRunUsage(

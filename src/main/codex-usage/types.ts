@@ -1,7 +1,27 @@
+import type { CodexUsageRawUsage } from './codex-usage-token-delta'
+
 export type CodexUsageProcessedFile = {
   path: string
   mtimeMs: number
   size: number
+}
+
+/** Everything needed to resume parsing a grown rollout where the last scan
+ *  stopped, plus the evidence that the already-parsed prefix is still intact. */
+export type CodexUsageParseResumeState = {
+  /** Offset just past the last line that ended in a newline. Never the raw file
+   *  size: a rollout can be observed mid-write with a partial trailing line. */
+  parsedBytes: number
+  /** Digest of the bytes just before `parsedBytes`. A rewrite or rotation that
+   *  leaves the file at the same length still changes this. */
+  boundaryDigest: string
+  /** `dev:ino`, or null where the platform does not report an inode. */
+  physicalFileId: string | null
+  sessionId: string
+  sessionCwd: string | null
+  currentCwd: string | null
+  currentModel: string | null
+  previousTotals: CodexUsageRawUsage | null
 }
 
 export type CodexUsageLocationBreakdown = {
@@ -94,6 +114,9 @@ export type CodexUsagePersistedFile = CodexUsageProcessedFile & {
    *  owner disappears, only deferred files need reparse to reclaim — not the
    *  entire rollout corpus. */
   hasDeferredClaims: boolean
+  /** Null when this file must be reparsed from byte 0 next scan. Absent on
+   *  caches written before incremental resume shipped. */
+  parseResumeState?: CodexUsageParseResumeState | null
 }
 
 export type CodexUsagePersistedState = {

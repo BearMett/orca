@@ -382,6 +382,25 @@ describe('listCodexSessionFiles', () => {
     expect(
       result.dailyAggregates.reduce((total, aggregate) => total + aggregate.eventCount, 0)
     ).toBe(3)
+
+    // A suffix-only parse must not leave a resume offset behind: once the
+    // bridge markers are gone, a later append has to reparse the whole file so
+    // the previously skipped prefix is counted.
+    rmSync(runtimeBridgeMarkerDir, { recursive: true, force: true })
+    rmSync(runtimeSessionPath)
+    writeFileSync(
+      systemSessionPath,
+      `${copiedPrefix}${usageRecord('2026-05-26T12:01:00.000Z', 3, 13)}${usageRecord('2026-05-26T12:03:00.000Z', 4, 17)}`
+    )
+
+    const afterBridge = await scanCodexUsageFiles([], result.processedFiles)
+
+    expect(
+      afterBridge.dailyAggregates.reduce((total, aggregate) => total + aggregate.totalTokens, 0)
+    ).toBe(17)
+    expect(
+      afterBridge.dailyAggregates.reduce((total, aggregate) => total + aggregate.eventCount, 0)
+    ).toBe(3)
   })
 
   it('counts token events copied into forked rollout files exactly once', async () => {

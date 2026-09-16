@@ -126,4 +126,45 @@ describe('CodexUsageStore', () => {
 
     expect(refreshMock).toHaveBeenCalledWith(false)
   })
+  it('forces one scan per run and stops re-forcing after a failed attempt', async () => {
+    const completedAt = new Date('2026-04-10T15:06:00.000Z').getTime()
+    const scanError = 'EMFILE: too many open files'
+    const failedScanState = (lastScanStartedAt: number) => ({
+      enabled: true,
+      lastScanStartedAt,
+      lastScanCompletedAt: completedAt - 60_000,
+      lastScanError: scanError
+    })
+    const scanStateResult = {
+      enabled: true,
+      isScanning: false,
+      lastScanStartedAt: completedAt - 60_000,
+      lastScanCompletedAt: completedAt - 60_000,
+      lastScanError: scanError,
+      hasAnyCodexData: false
+    }
+    const request = {
+      worktreeId: 'repo-1::/workspace/repo',
+      terminalSessionId: 'tab-1',
+      startedAt: completedAt - 120_000,
+      completedAt
+    }
+
+    const beforeAttempt = createStoreWithState({
+      scanState: failedScanState(completedAt - 60_000)
+    })
+    const beforeRefresh = vi.spyOn(beforeAttempt, 'refresh').mockResolvedValue(scanStateResult)
+    await beforeAttempt.getAutomationRunUsage(request)
+
+    expect(beforeRefresh).toHaveBeenCalledWith(true)
+
+    // That forced scan failed: it recorded an attempt but no completion. Later
+    // lookups must not keep forcing a full rescan of all Codex history.
+    const afterAttempt = createStoreWithState({ scanState: failedScanState(completedAt + 1000) })
+    const afterRefresh = vi.spyOn(afterAttempt, 'refresh').mockResolvedValue(scanStateResult)
+    const usage = await afterAttempt.getAutomationRunUsage(request)
+
+    expect(afterRefresh).toHaveBeenCalledWith(false)
+    expect(usage.unavailableReason).toBe('scan_failed')
+  })
 })
