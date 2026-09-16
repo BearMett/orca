@@ -322,12 +322,14 @@ describe('pre-profile pairing coordinator', () => {
   // fail outright against the exact desktop the fallback exists for.
   it('tolerates an old desktop scope refusal and commits a direct-only host', async () => {
     const events: string[] = []
+    const entries: ConnectionLogEntry[] = []
     const client = fakeClient([success({ version: '1.0.0' }), failure('forbidden')])
     const deps = dependencies(client, events)
 
     const attempt = startPreProfilePairing({
       offer: relayOffer,
       timeoutMs: 5_000,
+      connectOptions: { onLog: (entry) => entries.push(entry) },
       dependencies: deps
     })
     await expect(attempt.result).resolves.toEqual({ hostId: `host-${now}` })
@@ -342,6 +344,12 @@ describe('pre-profile pairing coordinator', () => {
       'save-host',
       'clear-journal'
     ])
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        message: 'Relay: desktop will not serve relay pairing',
+        detail: 'forbidden'
+      })
+    )
   })
 
   it('uses relay-basis provisioning when only the relay reaches post-E2EE status', async () => {

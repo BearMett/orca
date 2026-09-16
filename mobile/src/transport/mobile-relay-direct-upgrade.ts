@@ -69,7 +69,7 @@ export async function upgradeDirectMobileRelay(args: {
   }
 
   const initial = await getEndpoints(args.client, journal.reqId)
-  if (initial === 'method-not-found') {
+  if (initial === 'relay-pairing-unavailable') {
     await dependencies.clearJournal(args.host.id)
     return null
   }
@@ -93,7 +93,7 @@ export async function upgradeDirectMobileRelay(args: {
   )
   assertDirectInstall(journal, installed)
   const reconciled = await getEndpoints(args.client, journal.reqId)
-  if (reconciled === 'method-not-found') {
+  if (reconciled === 'relay-pairing-unavailable') {
     throw new Error('relay endpoint reconciliation became unavailable')
   }
   assertCommitted(reconciled, installed)
@@ -141,10 +141,10 @@ async function publishCommitted(
 async function getEndpoints(
   client: RpcClient,
   installReqId: string
-): Promise<PairingGetEndpointsResult | 'method-not-found'> {
+): Promise<PairingGetEndpointsResult | 'relay-pairing-unavailable'> {
   const reply = await relayPairingEndpointsRead.request(client, { installReqId })
   if (isPairingRelayRpcUnavailable(reply)) {
-    return 'method-not-found'
+    return 'relay-pairing-unavailable'
   }
   return PairingGetEndpointsResultSchema.parse(relayPairingEndpointsRead.interpret(reply))
 }

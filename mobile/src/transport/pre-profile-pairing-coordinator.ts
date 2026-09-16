@@ -228,6 +228,9 @@ async function runPairing(
     if (winner.path !== 'direct') {
       throw new Error('relay pairing RPC unavailable after relay path authentication')
     }
+    // Why: this commits a LAN-only host instead of failing, so the refusal code is the only
+    // record of why the phone never got a relay endpoint.
+    log('info', 'Relay: desktop will not serve relay pairing', provision.error.code)
     await dependencies.saveHost(baseHost(offer, hostId, hostName, now))
     await dependencies.clearJournal(journal.metadata.journalId)
     return { hostId }
