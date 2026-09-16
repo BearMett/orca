@@ -195,6 +195,23 @@ describe('a bare workspace id two partitions both hold', () => {
     expect(read.session.openFilesByWorktree?.[WORKTREE_ID]?.[0]?.dirtyDraftContent).toBe(DRAFT)
   })
 
+  it('still reads an empty base tab row as a gap when the id is contested', async () => {
+    const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
+      partitionedApi(collidingPartitions(SSH_HOST_ID)),
+      [
+        { id: REPO_ID, connectionId: null, executionHostId: 'local' },
+        { id: REPO_ID, connectionId: TARGET_ID, executionHostId: SSH_HOST_ID }
+      ]
+    )
+
+    // The #12721 shape - empty list here, the real one in the partition - does not stop being a gap
+    // because the id is contested. Reading the empty row as "the base has tabs" is what let the
+    // empty list win and then published it back to the host as a deletion.
+    expect(read.session.tabsByWorktree[WORKTREE_ID]?.map((entry) => entry.id)).toEqual([
+      'tab-rival'
+    ])
+  })
+
   it('never names the rival partition as the write target for a contested id', async () => {
     const read = await fetchWorkspaceSessionWithRuntimeHostOwners(
       partitionedApi(collidingPartitions(SSH_HOST_ID)),
