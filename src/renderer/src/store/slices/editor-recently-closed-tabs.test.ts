@@ -71,6 +71,31 @@ describe('createEditorSlice recently closed editor tabs', () => {
     expect(store.getState().openFiles[0]).not.toHaveProperty('mirroredFromRuntimeSession')
   })
 
+  it('restores a parked unsaved buffer when its snapshot carries one', () => {
+    const store = createEditorStore()
+    store.setState({
+      recentlyClosedEditorTabsByWorktree: {
+        'wt-1': [
+          {
+            filePath: '/repo/notes.md',
+            relativePath: 'notes.md',
+            worktreeId: 'wt-1',
+            language: 'markdown',
+            mode: 'edit',
+            dirtyDraftContent: 'rescued draft'
+          }
+        ]
+      }
+    })
+
+    expect(store.getState().reopenClosedEditorTab('wt-1')).toBe(true)
+
+    const restored = store.getState().openFiles[0]
+    expect(restored).toMatchObject({ filePath: '/repo/notes.md', isDirty: true })
+    expect(store.getState().editorDrafts[restored.id]).toBe('rescued draft')
+    expect(restored).not.toHaveProperty('dirtyDraftContent')
+  })
+
   it('reopens close-all mirrored editor tabs as local tabs', () => {
     const store = createEditorStore()
     openMirroredEditor(store, '/repo/notes.md')

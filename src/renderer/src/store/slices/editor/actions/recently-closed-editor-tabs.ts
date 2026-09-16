@@ -29,11 +29,16 @@ export function createRecentlyClosedEditorTabs(
           [worktreeId]: (s.recentlyClosedEditorTabsByWorktree[worktreeId] ?? []).slice(1)
         }
       }))
-      const { position, reopenId, ...file } = next
+      const { position, reopenId, dirtyDraftContent, ...file } = next
       const restoredFileId = get().openFile(file, {
         targetGroupId: position?.groupId,
         reopenId
       })
+      // Why: the close could not keep this buffer open (a same-owner duplicate held a rival draft), so reopen is its recovery path.
+      if (dirtyDraftContent !== undefined) {
+        get().setEditorDraft(restoredFileId, dirtyDraftContent)
+        get().markFileDirty(restoredFileId, true)
+      }
       restoreRecentlyClosedTabPosition(get, worktreeId, restoredFileId, position)
       return true
     },

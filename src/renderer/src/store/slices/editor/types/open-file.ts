@@ -162,6 +162,8 @@ export type ClosedEditorTabSnapshot = Omit<
 > & {
   reopenId?: string
   position?: RecentlyClosedTabPosition
+  /** Unsaved buffer to restore with the tab, for a close that could not keep the draft open. */
+  dirtyDraftContent?: string
 }
 
 export const MAX_RECENT_CLOSED_EDITOR_TABS = 10
