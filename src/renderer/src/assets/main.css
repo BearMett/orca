@@ -2753,12 +2753,22 @@ html.native-shell .app-layout {
   outline-offset: 1px;
 }
 
-.orca-diff-comment-range-highlight {
-  background: rgba(59, 130, 246, 0.14);
+/* Why: the band a gutter drag paints, and the band that stays lit under an open composer.
+   Mixed from --ring (the token for active selection) rather than an invented accent, and
+   carried mostly by the solid left bar so it still reads on top of the added/removed row
+   tints. Matches the .orca-conflict-* recipe above. */
+.monaco-editor .orca-diff-comment-range-highlight {
+  background: color-mix(in srgb, var(--ring) 38%, transparent);
+  border-left: 3px solid var(--ring);
 }
 
-.dark .orca-diff-comment-range-highlight {
-  background: rgba(96, 165, 250, 0.18);
+.monaco-editor .orca-diff-comment-range-margin {
+  background: color-mix(in srgb, var(--ring) 26%, transparent);
+}
+
+/* Why: while a drag is live the pane stops trying to select text under the sweeping pointer. */
+.orca-diff-comment-range-dragging {
+  user-select: none;
 }
 
 .orca-diff-comment-inline {
