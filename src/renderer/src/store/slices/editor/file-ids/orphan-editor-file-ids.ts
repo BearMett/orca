@@ -22,12 +22,16 @@ export function collectOrphanEditorFileIds(
   )
 }
 
+/**
+ * Orphans per worktree. Why not one flat set: an unowned editor id is the bare file path, so the
+ * same id can name a live document in another worktree — a flat set sweeps that one too.
+ */
 export function collectHydratedOrphanEditorFileIds(
   openFiles: readonly Pick<OpenFile, 'id' | 'isDirty' | 'worktreeId'>[],
   tabsByWorktree: Record<string, Tab[]>,
   activeFileIdByWorktree: Record<string, string | null>,
   editorDrafts: Record<string, string>
-): Set<string> {
+): Map<string, Set<string>> {
   const fileIdsByWorktree = new Map<string, Set<string>>()
   for (const file of openFiles) {
     // Why: an unsaved buffer must survive the sweep; only a clean document is disposable chrome.
@@ -43,7 +47,7 @@ export function collectHydratedOrphanEditorFileIds(
     }
     fileIdsByWorktree.set(file.worktreeId, new Set([file.id]))
   }
-  const orphanFileIds = new Set<string>()
+  const orphanFileIdsByWorktree = new Map<string, Set<string>>()
   for (const [worktreeId, fileIds] of fileIdsByWorktree) {
     const tabs = tabsByWorktree[worktreeId]
     // Why: missing = unknown, skip; empty = known, prune — a hydrated but empty tab list is
@@ -51,13 +55,18 @@ export function collectHydratedOrphanEditorFileIds(
     if (!tabs) {
       continue
     }
-    for (const fileId of collectOrphanEditorFileIds(
-      fileIds,
-      tabs,
-      activeFileIdByWorktree[worktreeId]
-    )) {
-      orphanFileIds.add(fileId)
+    const orphans = collectOrphanEditorFileIds(fileIds, tabs, activeFileIdByWorktree[worktreeId])
+    if (orphans.length > 0) {
+      orphanFileIdsByWorktree.set(worktreeId, new Set(orphans))
     }
   }
-  return orphanFileIds
+  return orphanFileIdsByWorktree
+}
+
+/** Membership test for a worktree-scoped orphan map, so callers never compare ids alone. */
+export function isOrphanEditorFile(
+  orphanFileIdsByWorktree: ReadonlyMap<string, ReadonlySet<string>>,
+  file: Pick<OpenFile, 'id' | 'worktreeId'>
+): boolean {
+  return orphanFileIdsByWorktree.get(file.worktreeId)?.has(file.id) === true
 }

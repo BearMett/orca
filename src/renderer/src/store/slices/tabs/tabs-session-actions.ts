@@ -36,11 +36,13 @@ function projectWorktreeTabModelReconciliations(
   // Private working copy so batch-owned maps can be written in place.
   const working = { ...state }
   const merged: Partial<AppState> = {}
-  const orphanEditorFileIds = new Set<string>()
+  // Why per worktree: an unowned editor id is the bare file path, so the same id can name a live
+  // document in another workspace — a flat set of orphans would sweep that one too.
+  const orphanEditorFileIdsByWorktree = new Map<string, Set<string>>()
   for (const worktreeId of worktreeIds) {
     const reconciliation = projectWorktreeTabModelReconciliation(working, worktreeId, batch)
-    for (const fileId of reconciliation.orphanEditorFileIds) {
-      orphanEditorFileIds.add(fileId)
+    if (reconciliation.orphanEditorFileIds.length > 0) {
+      orphanEditorFileIdsByWorktree.set(worktreeId, new Set(reconciliation.orphanEditorFileIds))
     }
     if (Object.keys(reconciliation.patch).length === 0) {
       continue
@@ -50,24 +52,32 @@ function projectWorktreeTabModelReconciliations(
   }
   // Why only here: `openFiles` is written once the whole fold is projected, so the batch's
   // one-shot editor index stays valid — and an unsaved buffer is never swept.
-  if (orphanEditorFileIds.size > 0) {
+  if (orphanEditorFileIdsByWorktree.size > 0) {
     // Why the draft check: isDirty is set by a debounced callback, so a just-typed buffer can hold
     // a draft before the flag flushes — sweeping it would discard the user's text.
-    const sweptFileIds = new Set(
-      state.openFiles
-        .filter(
-          (file) =>
-            file.isDirty !== true &&
-            state.editorDrafts[file.id] === undefined &&
-            orphanEditorFileIds.has(file.id)
-        )
-        .map((file) => file.id)
-    )
-    if (sweptFileIds.size > 0) {
-      merged.openFiles = state.openFiles.filter((file) => !sweptFileIds.has(file.id))
+    const sweptFileIdsByWorktree = new Map<string, Set<string>>()
+    for (const file of state.openFiles) {
+      if (
+        file.isDirty === true ||
+        state.editorDrafts[file.id] !== undefined ||
+        orphanEditorFileIdsByWorktree.get(file.worktreeId)?.has(file.id) !== true
+      ) {
+        continue
+      }
+      const swept = sweptFileIdsByWorktree.get(file.worktreeId)
+      if (swept) {
+        swept.add(file.id)
+        continue
+      }
+      sweptFileIdsByWorktree.set(file.worktreeId, new Set([file.id]))
+    }
+    if (sweptFileIdsByWorktree.size > 0) {
+      merged.openFiles = state.openFiles.filter(
+        (file) => sweptFileIdsByWorktree.get(file.worktreeId)?.has(file.id) !== true
+      )
       const tabBarOrder = pruneTabBarOrderEntries(
         working.tabBarOrderByWorktree ?? state.tabBarOrderByWorktree,
-        sweptFileIds
+        sweptFileIdsByWorktree
       )
       if (tabBarOrder) {
         merged.tabBarOrderByWorktree = tabBarOrder
@@ -80,7 +90,7 @@ function projectWorktreeTabModelReconciliations(
 /** Why: a swept id left in the strip order still shifts positions on the next reconcile. */
 function pruneTabBarOrderEntries(
   tabBarOrderByWorktree: AppState['tabBarOrderByWorktree'],
-  sweptFileIds: ReadonlySet<string>
+  sweptFileIdsByWorktree: ReadonlyMap<string, ReadonlySet<string>>
 ): AppState['tabBarOrderByWorktree'] | null {
   if (!tabBarOrderByWorktree) {
     return null
@@ -88,7 +98,8 @@ function pruneTabBarOrderEntries(
   let changed = false
   const next: AppState['tabBarOrderByWorktree'] = {}
   for (const [worktreeId, order] of Object.entries(tabBarOrderByWorktree)) {
-    const pruned = order.filter((entryId) => !sweptFileIds.has(entryId))
+    const sweptFileIds = sweptFileIdsByWorktree.get(worktreeId)
+    const pruned = sweptFileIds ? order.filter((entryId) => !sweptFileIds.has(entryId)) : order
     changed = changed || pruned.length !== order.length
     next[worktreeId] = pruned.length === order.length ? order : pruned
   }

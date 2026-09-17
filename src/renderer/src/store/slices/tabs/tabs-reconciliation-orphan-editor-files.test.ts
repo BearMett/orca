@@ -15,6 +15,8 @@ createTabsSliceMockApi()
 
 const WORKTREE_ID = 'repo-1::/workspace'
 const GROUP_ID = 'group-1'
+const OTHER_WORKTREE_ID = 'repo-2::/other-workspace'
+const OTHER_GROUP_ID = 'group-2'
 const TABBED_FILE_ID = '/workspace/tabbed.ts'
 const ORPHAN_FILE_ID = '/workspace/orphan.ts'
 
@@ -143,6 +145,57 @@ describe('hydrated reconciliation orphan editor sweep', () => {
     store.getState().reconcileWorktreeTabModels([WORKTREE_ID])
 
     expect(store.getState().openFiles).toHaveLength(2)
+  })
+
+  it('leaves the same id alone in a workspace that still renders it', () => {
+    // Why the shared id: an unowned editor id is the bare file path, so one id names a live
+    // document in the other workspace while it is orphaned here.
+    const store = prepareStore([openFile(TABBED_FILE_ID), openFile(ORPHAN_FILE_ID)], TABBED_FILE_ID)
+    store.setState({
+      openFiles: [
+        openFile(TABBED_FILE_ID),
+        openFile(ORPHAN_FILE_ID),
+        openFile(ORPHAN_FILE_ID, { worktreeId: OTHER_WORKTREE_ID })
+      ],
+      unifiedTabsByWorktree: {
+        [WORKTREE_ID]: [editorTab(TABBED_FILE_ID)],
+        [OTHER_WORKTREE_ID]: [
+          { ...editorTab(ORPHAN_FILE_ID), worktreeId: OTHER_WORKTREE_ID, groupId: OTHER_GROUP_ID }
+        ]
+      },
+      groupsByWorktree: {
+        ...store.getState().groupsByWorktree,
+        [OTHER_WORKTREE_ID]: [
+          {
+            id: OTHER_GROUP_ID,
+            worktreeId: OTHER_WORKTREE_ID,
+            activeTabId: `tab:${ORPHAN_FILE_ID}`,
+            tabOrder: [`tab:${ORPHAN_FILE_ID}`],
+            recentTabIds: [`tab:${ORPHAN_FILE_ID}`]
+          }
+        ]
+      },
+      activeGroupIdByWorktree: {
+        ...store.getState().activeGroupIdByWorktree,
+        [OTHER_WORKTREE_ID]: OTHER_GROUP_ID
+      },
+      layoutByWorktree: {
+        ...store.getState().layoutByWorktree,
+        [OTHER_WORKTREE_ID]: { type: 'leaf' as const, groupId: OTHER_GROUP_ID }
+      },
+      tabBarOrderByWorktree: {
+        [WORKTREE_ID]: [TABBED_FILE_ID, ORPHAN_FILE_ID],
+        [OTHER_WORKTREE_ID]: [ORPHAN_FILE_ID]
+      }
+    })
+
+    store.getState().reconcileWorktreeTabModels([WORKTREE_ID, OTHER_WORKTREE_ID])
+
+    expect(store.getState().openFiles.map((file) => [file.worktreeId, file.id])).toEqual([
+      [WORKTREE_ID, TABBED_FILE_ID],
+      [OTHER_WORKTREE_ID, ORPHAN_FILE_ID]
+    ])
+    expect(store.getState().tabBarOrderByWorktree[OTHER_WORKTREE_ID]).toEqual([ORPHAN_FILE_ID])
   })
 
   it('sweeps a workspace whose hydrated tab list is present but empty', () => {

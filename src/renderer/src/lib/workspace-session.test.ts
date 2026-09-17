@@ -687,6 +687,21 @@ describe('buildEditorSessionData duplicate collapse', () => {
     )
   })
 
+  it('carries the merged duplicate disk baseline onto the equal-draft survivor', () => {
+    const ids = [FILE, `editor:b:${FILE}`]
+    const session = buildEditorSession(
+      [
+        editOpenFile(ids[0], { isDirty: true }),
+        editOpenFile(ids[1], { isDirty: true, lastKnownDiskSignature: 'sig' })
+      ],
+      { editorDrafts: { [ids[0]]: 'same text', [ids[1]]: 'same text' } }
+    )
+
+    expect(session.openFilesByWorktree[WORKTREE]).toEqual([
+      expect.objectContaining({ dirtyDraftContent: 'same text', lastKnownDiskSignature: 'sig' })
+    ])
+  })
+
   it('remaps the active file id onto the variant that absorbed it', () => {
     const ids = [FILE, `editor:b:${FILE}`, `editor:c:${FILE}`]
     const session = buildEditorSession(

@@ -16,7 +16,10 @@ import {
   LegacyHydratedEditorFileIndex,
   shouldHydrateWithOwnedEditorFileId
 } from '../file-ids/hydrated-editor-file-ids'
-import { collectHydratedOrphanEditorFileIds } from '../file-ids/orphan-editor-file-ids'
+import {
+  collectHydratedOrphanEditorFileIds,
+  isOrphanEditorFile
+} from '../file-ids/orphan-editor-file-ids'
 
 export function createHydrateEditorSession(
   set: EditorSet,
@@ -146,14 +149,21 @@ export function createHydrateEditorSession(
         // `?? {}` because an editor-only store (tests, partial slices) has no tab map at all.
         const nextTabsByWorktree =
           migratedTabsAndGroups.unifiedTabsByWorktree ?? s.unifiedTabsByWorktree ?? {}
-        const orphanFileIds = collectHydratedOrphanEditorFileIds(
+        const orphanFileIdsByWorktree = collectHydratedOrphanEditorFileIds(
           openFiles,
           nextTabsByWorktree,
           filteredActiveFileIdByWorktree,
           editorDrafts
         )
+        const survivingFiles =
+          orphanFileIdsByWorktree.size > 0
+            ? openFiles.filter((file) => !isOrphanEditorFile(orphanFileIdsByWorktree, file))
+            : openFiles
+        // Why by surviving id, not by orphan id: drafts and front-matter keys are keyed by id alone,
+        // and an id orphaned in one worktree can still name a live document in another.
+        const survivingFileIds = new Set(survivingFiles.map((file) => file.id))
         const survivingIds = new Set(
-          [...usedOpenFileIds].filter((fileId) => !orphanFileIds.has(fileId))
+          [...usedOpenFileIds].filter((fileId) => survivingFileIds.has(fileId))
         )
         const markdownFrontmatterVisible = resolveHydratedEditorFrontmatter(
           persistedMarkdownFrontmatterVisible,
@@ -162,16 +172,13 @@ export function createHydrateEditorSession(
         )
 
         return {
-          openFiles:
-            orphanFileIds.size > 0
-              ? openFiles.filter((file) => !orphanFileIds.has(file.id))
-              : openFiles,
+          openFiles: survivingFiles,
           editorDrafts:
-            orphanFileIds.size > 0
-              ? Object.fromEntries(
-                  Object.entries(editorDrafts).filter(([fileId]) => !orphanFileIds.has(fileId))
-                )
-              : editorDrafts,
+            survivingFiles.length === openFiles.length
+              ? editorDrafts
+              : Object.fromEntries(
+                  Object.entries(editorDrafts).filter(([fileId]) => survivingFileIds.has(fileId))
+                ),
           markdownFrontmatterVisible,
           activeFileId: nextActiveFileId,
           activeFileIdByWorktree: filteredActiveFileIdByWorktree,

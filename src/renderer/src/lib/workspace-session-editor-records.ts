@@ -48,6 +48,25 @@ function hasDivergentDraft(left: PersistedOpenFile, right: PersistedOpenFile): b
   )
 }
 
+/**
+ * Why: merging drops the candidate's row, so a baseline it alone carries would be lost. The drafts
+ * are the same text, so the candidate's baseline describes the kept record's document too.
+ */
+function withCarriedDiskBaseline(
+  kept: PersistedOpenFile,
+  candidate: PersistedOpenFile
+): PersistedOpenFile | null {
+  if (
+    kept.dirtyDraftContent === undefined ||
+    kept.dirtyDraftContent !== candidate.dirtyDraftContent ||
+    kept.lastKnownDiskSignature !== undefined ||
+    candidate.lastKnownDiskSignature === undefined
+  ) {
+    return null
+  }
+  return { ...kept, lastKnownDiskSignature: candidate.lastKnownDiskSignature }
+}
+
 function winsOverKeptRecord(
   candidate: { record: PersistedOpenFile; fileId: string },
   kept: { record: PersistedOpenFile; fileId: string },
@@ -120,6 +139,11 @@ export function buildPersistedEditorFileRecords(
         activeFileIdByWorktree[file.worktreeId]
       )
     ) {
+      const withBaseline = withCarriedDiskBaseline(kept.record, record)
+      if (withBaseline) {
+        records[kept.position] = withBaseline
+        kept.record = withBaseline
+      }
       survivingFileIdByMergedId.set(file.id, kept.fileId)
       continue
     }
