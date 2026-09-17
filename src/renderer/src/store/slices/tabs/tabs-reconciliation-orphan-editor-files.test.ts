@@ -144,4 +144,15 @@ describe('hydrated reconciliation orphan editor sweep', () => {
 
     expect(store.getState().openFiles).toHaveLength(2)
   })
+
+  it('sweeps a workspace whose hydrated tab list is present but empty', () => {
+    const store = prepareStore([openFile(TABBED_FILE_ID), openFile(ORPHAN_FILE_ID)], TABBED_FILE_ID)
+    // Why empty rather than absent: the tab model is known and renders no editor, so both documents
+    // are unreachable — only the workspace's active file is held back by the selection guard.
+    store.setState({ unifiedTabsByWorktree: { [WORKTREE_ID]: [] } })
+
+    store.getState().reconcileWorktreeTabModels([WORKTREE_ID])
+
+    expect(store.getState().openFiles.map((file) => file.id)).toEqual([TABBED_FILE_ID])
+  })
 })

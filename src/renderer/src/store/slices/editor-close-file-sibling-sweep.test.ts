@@ -287,6 +287,83 @@ describe('closeFile duplicate-record sweep', () => {
     expect(store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).toEqual([])
   })
 
+  it('leaves another worktree whose tab reuses the closed file id untouched', () => {
+    const store = createEditorTabsStore()
+    const otherWorktreeId = 'wt-2'
+    const otherGroupId = 'group-2'
+    seed(
+      store,
+      [openFile(FILE_PATH)],
+      [editorTab(`tab:${FILE_PATH}`, FILE_PATH)],
+      [group(GROUP_ID, [`tab:${FILE_PATH}`])]
+    )
+    store.setState({
+      unifiedTabsByWorktree: {
+        ...store.getState().unifiedTabsByWorktree,
+        // Why the shared entity id: an unoccupied editor id is just the file path, so two workspaces
+        // can name the same tab entity — the scan must not reach across on that coincidence.
+        [otherWorktreeId]: [
+          {
+            ...editorTab('tab:wt-2', FILE_PATH, otherGroupId),
+            worktreeId: otherWorktreeId
+          }
+        ]
+      },
+      groupsByWorktree: {
+        ...store.getState().groupsByWorktree,
+        [otherWorktreeId]: [
+          {
+            id: otherGroupId,
+            worktreeId: otherWorktreeId,
+            activeTabId: 'tab:wt-2',
+            tabOrder: ['tab:wt-2'],
+            recentTabIds: ['tab:wt-2']
+          }
+        ]
+      },
+      layoutByWorktree: {
+        ...store.getState().layoutByWorktree,
+        [otherWorktreeId]: { type: 'leaf' as const, groupId: otherGroupId }
+      }
+    })
+    const otherTabsBefore = store.getState().unifiedTabsByWorktree[otherWorktreeId]
+
+    store.getState().closeFile(FILE_PATH)
+
+    expect(store.getState().unifiedTabsByWorktree[otherWorktreeId]).toBe(otherTabsBefore)
+    expect(store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).toEqual([])
+  })
+
+  it('selects the closed file`s neighbour instead of skipping past the swept siblings', () => {
+    const store = createEditorTabsStore()
+    const files = [
+      openFile('editor:x', { filePath: '/repo/x.ts', relativePath: 'x.ts' }),
+      openFile('editor:dup-a'),
+      openFile('editor:dup-b'),
+      openFile('editor:y', { filePath: '/repo/y.ts', relativePath: 'y.ts' }),
+      openFile('editor:z', { filePath: '/repo/z.ts', relativePath: 'z.ts' })
+    ]
+    // Why no tab model: with one hydrated, the unified close path re-derives the selection from the
+    // group's active tab and closeFile's own reselect never shows.
+    store.setState({
+      openFiles: files,
+      activeFileId: 'editor:dup-b',
+      activeFileIdByWorktree: { [WORKTREE_ID]: 'editor:dup-b' },
+      tabBarOrderByWorktree: { [WORKTREE_ID]: files.map((file) => file.id) }
+    })
+
+    store.getState().closeFile('editor:dup-b')
+
+    expect(store.getState().openFiles.map((file) => file.id)).toEqual([
+      'editor:x',
+      'editor:y',
+      'editor:z'
+    ])
+    // dup-a is swept with dup-b, so the survivor that took their place is y — not z.
+    expect(store.getState().activeFileIdByWorktree[WORKTREE_ID]).toBe('editor:y')
+    expect(store.getState().activeFileId).toBe('editor:y')
+  })
+
   it('never sweeps a read-only live-tail log along with the writable tab for its path', () => {
     const store = createEditorTabsStore()
     const logId = 'editor:log'

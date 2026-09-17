@@ -46,7 +46,8 @@ export function collectHydratedOrphanEditorFileIds(
   const orphanFileIds = new Set<string>()
   for (const [worktreeId, fileIds] of fileIdsByWorktree) {
     const tabs = tabsByWorktree[worktreeId]
-    // Why: a worktree with no hydrated tab model proves nothing about which documents are orphaned.
+    // Why: missing = unknown, skip; empty = known, prune — a hydrated but empty tab list is
+    // positive evidence that no editor tab renders those documents.
     if (!tabs) {
       continue
     }

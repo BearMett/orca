@@ -48,4 +48,26 @@ describe('collectHydratedOrphanEditorFileIds', () => {
   it('keeps an orphan that already flushed its dirty flag', () => {
     expect([...collectOrphans({ isDirty: true }, {})]).toEqual([])
   })
+
+  it('skips a worktree missing from the hydrated tab map', () => {
+    expect([
+      ...collectHydratedOrphanEditorFileIds(
+        [{ id: ORPHAN_FILE_ID, worktreeId: WORKTREE_ID, isDirty: false }],
+        {},
+        {},
+        {}
+      )
+    ]).toEqual([])
+  })
+
+  it('prunes a worktree whose hydrated tab list is present but empty', () => {
+    expect([
+      ...collectHydratedOrphanEditorFileIds(
+        [{ id: ORPHAN_FILE_ID, worktreeId: WORKTREE_ID, isDirty: false }],
+        { [WORKTREE_ID]: [] },
+        {},
+        {}
+      )
+    ]).toEqual([ORPHAN_FILE_ID])
+  })
 })

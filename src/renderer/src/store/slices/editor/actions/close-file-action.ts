@@ -21,27 +21,30 @@ export function createCloseFileAction(
 ): Pick<EditorSlice, 'closeFile'> {
   return {
     closeFile: (fileId) => {
+      // Why one snapshot: every read below describes the same pre-set() state, and closeFile runs
+      // once per tab in the bulk-close loops, so a get() per candidate is paid N times over.
+      const preCloseState = get()
       // Why: capture untitled+dirty state before set() mutates the store, so cleanup of throwaway untitled files can decide after removal.
-      const preClose = get().openFiles.find((f) => f.id === fileId)
+      const preClose = preCloseState.openFiles.find((f) => f.id === fileId)
 
       // Why: also check editorDrafts — isDirty is set by a debounced callback, so a draft can exist before isDirty flushes; a draft means the user typed something.
       const hasUnsavedWork = (file: OpenFile): boolean =>
-        file.isDirty === true || get().editorDrafts[file.id] !== undefined
+        file.isDirty === true || preCloseState.editorDrafts[file.id] !== undefined
       const documentFileIds = preClose
-        ? collectSameDocumentOpenFileIds(get().openFiles, preClose)
+        ? collectSameDocumentOpenFileIds(preCloseState.openFiles, preClose)
         : new Set<string>()
-      const documentFiles = get().openFiles.filter((file) => documentFileIds.has(file.id))
+      const documentFiles = preCloseState.openFiles.filter((file) => documentFileIds.has(file.id))
       // Why: duplicate records for one document each keep their own tab; closing one of them
       // leaves the rest to reopen the file, so a close takes the whole identity with it.
       // Why the unsaved filter: the caller's save/discard confirmation only asked about the named
       // id, so a duplicate holding its own unsaved buffer stays open rather than being discarded
       // silently — closing that one goes through the prompt on its own.
-      const keptSiblings = documentFiles.filter(
-        (file) => file.id !== fileId && hasUnsavedWork(file)
+      const keptSiblingIds = new Set(
+        documentFiles.filter((file) => file.id !== fileId && hasUnsavedWork(file)).map((f) => f.id)
       )
       const siblingIds = new Set(
         documentFiles.length > 0
-          ? documentFiles.filter((file) => !keptSiblings.includes(file)).map((file) => file.id)
+          ? documentFiles.filter((file) => !keptSiblingIds.has(file.id)).map((file) => file.id)
           : [fileId]
       )
       const sweptUnsavedWork = documentFiles.some(
@@ -49,20 +52,19 @@ export function createCloseFileAction(
       )
       // Why the kept-sibling guard: a surviving duplicate still points at the untitled placeholder on disk.
       const shouldDeleteFromDisk =
-        keptSiblings.length === 0 && shouldDeleteUntouchedUntitledFile(preClose, sweptUnsavedWork)
+        keptSiblingIds.size === 0 && shouldDeleteUntouchedUntitledFile(preClose, sweptUnsavedWork)
 
       // Why: mirrored tabs are host-owned, so the host must close its copy or its next snapshot re-mirrors the file and the tab reopens.
       // Why per sibling: the notifier resolves the mirror from the id it is given, so a mirrored duplicate swept under another id is never reported.
-      notifyHostOfMirroredEditorClose(get(), preClose?.worktreeId, fileId)
+      notifyHostOfMirroredEditorClose(preCloseState, preClose?.worktreeId, fileId)
       for (const siblingId of siblingIds) {
         if (siblingId !== fileId) {
-          notifyHostOfMirroredEditorClose(get(), preClose?.worktreeId, siblingId)
+          notifyHostOfMirroredEditorClose(preCloseState, preClose?.worktreeId, siblingId)
         }
       }
 
       set((s) => {
         const closedFile = s.openFiles.find((f) => f.id === fileId)
-        const idx = s.openFiles.findIndex((f) => f.id === fileId)
         const newFiles = s.openFiles.filter((f) => !siblingIds.has(f.id))
         const newEditorDrafts = { ...s.editorDrafts }
         const newMarkdownViewMode = { ...s.markdownViewMode }
@@ -104,6 +106,9 @@ export function createCloseFileAction(
         if (activeWasClosed) {
           // Find next file within the same worktree
           const worktreeId = closedFile?.worktreeId
+          const preSweepFiles = worktreeId
+            ? s.openFiles.filter((f) => f.worktreeId === worktreeId)
+            : s.openFiles
           const worktreeFiles = worktreeId
             ? newFiles.filter((f) => f.worktreeId === worktreeId)
             : newFiles
@@ -111,11 +116,14 @@ export function createCloseFileAction(
             newActiveId = null
           } else {
             // Pick adjacent file from same worktree
-            const closedWorktreeIdx = worktreeId
-              ? s.openFiles
-                  .filter((f) => f.worktreeId === worktreeId)
-                  .findIndex((f) => f.id === fileId)
-              : idx
+            const closedPreSweepIdx = preSweepFiles.findIndex((f) => f.id === fileId)
+            // Why counted over survivors: the raw pre-sweep index is shifted by every swept sibling
+            // ahead of the closed file, which skips that many tabs in the post-sweep list.
+            const closedWorktreeIdx =
+              closedPreSweepIdx === -1
+                ? worktreeFiles.length
+                : preSweepFiles.slice(0, closedPreSweepIdx).filter((f) => !siblingIds.has(f.id))
+                    .length
             newActiveId =
               closedWorktreeIdx >= worktreeFiles.length
                 ? worktreeFiles.at(-1)!.id
@@ -254,7 +262,14 @@ export function createCloseFileAction(
 
       // Why: route editor/diff closes through the unified close path (MRU + visual-neighbor fallback) so they match terminal/browser tab-close behavior.
       // Why collected first: each close rewrites the tab maps this scan would otherwise be reading.
-      const closableTabIds = Object.values(get().unifiedTabsByWorktree ?? {}).flatMap((tabs) =>
+      // Why scoped: every swept record shares preClose's worktree and an editor tab is filed under
+      // its file's worktree, so the other worktrees cost a pass per close and can only contribute a
+      // foreign tab that happens to reuse the id.
+      const tabsByWorktree = get().unifiedTabsByWorktree ?? {}
+      const scannedTabLists = preClose
+        ? [tabsByWorktree[preClose.worktreeId] ?? []]
+        : Object.values(tabsByWorktree)
+      const closableTabIds = scannedTabLists.flatMap((tabs) =>
         tabs
           .filter(
             (entry) => siblingIds.has(entry.entityId) && isEditorTabContentType(entry.contentType)
