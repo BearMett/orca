@@ -399,4 +399,62 @@ describe('closeFile duplicate-record sweep', () => {
       (store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).map((tab) => tab.entityId)
     ).toEqual([FILE_PATH])
   })
+
+  it('keeps a clean duplicate whose tab is pinned', () => {
+    const store = createEditorTabsStore()
+    const pinnedId = 'editor:dup-pinned'
+    seed(
+      store,
+      [openFile(FILE_PATH), openFile(pinnedId)],
+      [
+        editorTab(`tab:${FILE_PATH}`, FILE_PATH),
+        { ...editorTab(`tab:${pinnedId}`, pinnedId), isPinned: true }
+      ],
+      [group(GROUP_ID, [`tab:${FILE_PATH}`, `tab:${pinnedId}`])]
+    )
+
+    store.getState().closeFile(FILE_PATH)
+
+    expect(store.getState().openFiles.map((file) => file.id)).toEqual([pinnedId])
+    expect(
+      (store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).map((tab) => tab.entityId)
+    ).toEqual([pinnedId])
+  })
+
+  it('sweeps the same clean duplicate once its tab is unpinned', () => {
+    const store = createEditorTabsStore()
+    const siblingId = 'editor:dup-pinned'
+    seed(
+      store,
+      [openFile(FILE_PATH), openFile(siblingId)],
+      [editorTab(`tab:${FILE_PATH}`, FILE_PATH), editorTab(`tab:${siblingId}`, siblingId)],
+      [group(GROUP_ID, [`tab:${FILE_PATH}`, `tab:${siblingId}`])]
+    )
+
+    store.getState().closeFile(FILE_PATH)
+
+    expect(store.getState().openFiles).toEqual([])
+    expect(store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).toEqual([])
+  })
+
+  it('still closes the named record when its own tab is pinned', () => {
+    const store = createEditorTabsStore()
+    const siblingId = 'editor:dup-pinned'
+    seed(
+      store,
+      [openFile(FILE_PATH), openFile(siblingId)],
+      [
+        { ...editorTab(`tab:${FILE_PATH}`, FILE_PATH), isPinned: true },
+        { ...editorTab(`tab:${siblingId}`, siblingId), isPinned: true }
+      ],
+      [group(GROUP_ID, [`tab:${FILE_PATH}`, `tab:${siblingId}`])]
+    )
+
+    store.getState().closeFile(FILE_PATH)
+
+    expect(store.getState().openFiles.map((file) => file.id)).toEqual([siblingId])
+    expect(
+      (store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).map((tab) => tab.entityId)
+    ).toEqual([siblingId])
+  })
 })

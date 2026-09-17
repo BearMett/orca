@@ -34,13 +34,27 @@ export function createCloseFileAction(
         ? collectSameDocumentOpenFileIds(preCloseState.openFiles, preClose)
         : new Set<string>()
       const documentFiles = preCloseState.openFiles.filter((file) => documentFileIds.has(file.id))
+      // Why: a pinned tab survives every bulk close (see `isPinned` in shared/tab-types.ts), and the
+      // sweep is a bulk close the user never aimed at that sibling — so pinning keeps it like a
+      // rival draft does. The named id still closes even when pinned: that one was aimed at.
+      const pinnedSiblingIds = new Set(
+        preClose
+          ? (preCloseState.unifiedTabsByWorktree?.[preClose.worktreeId] ?? [])
+              .filter((tab) => tab.isPinned === true && isEditorTabContentType(tab.contentType))
+              .map((tab) => tab.entityId)
+          : []
+      )
       // Why: duplicate records for one document each keep their own tab; closing one of them
       // leaves the rest to reopen the file, so a close takes the whole identity with it.
       // Why the unsaved filter: the caller's save/discard confirmation only asked about the named
       // id, so a duplicate holding its own unsaved buffer stays open rather than being discarded
       // silently — closing that one goes through the prompt on its own.
       const keptSiblingIds = new Set(
-        documentFiles.filter((file) => file.id !== fileId && hasUnsavedWork(file)).map((f) => f.id)
+        documentFiles
+          .filter(
+            (file) => file.id !== fileId && (hasUnsavedWork(file) || pinnedSiblingIds.has(file.id))
+          )
+          .map((f) => f.id)
       )
       const siblingIds = new Set(
         documentFiles.length > 0
