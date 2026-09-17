@@ -8,12 +8,13 @@ import {
 import type { AppState } from '../types'
 import type { Tab } from '../../../../shared/tab-types'
 
-const { toastErrorMock } = vi.hoisted(() => ({
-  toastErrorMock: vi.fn()
+const { toastErrorMock, toastInfoMock } = vi.hoisted(() => ({
+  toastErrorMock: vi.fn(),
+  toastInfoMock: vi.fn()
 }))
 
 vi.mock('sonner', () => ({
-  toast: { error: toastErrorMock }
+  toast: { error: toastErrorMock, info: toastInfoMock }
 }))
 
 const { notifyHostOfMirroredEditorCloseMock } = vi.hoisted(() => ({
@@ -56,6 +57,38 @@ describe('createEditorSlice recently closed editor tabs', () => {
     )
   }
 
+  function openLocalEditor(store: StoreApi<AppState>, filePath = '/repo/notes.md'): string {
+    return store.getState().openFile({
+      filePath,
+      relativePath: filePath.replace('/repo/', ''),
+      worktreeId: 'wt-1',
+      language: 'markdown',
+      mode: 'edit'
+    })
+  }
+
+  /** A draft the restore heal could not give a tab of its own, waiting on the reopen stack. */
+  function parkRecoveredDraft(
+    store: StoreApi<AppState>,
+    dirtyDraftContent: string,
+    filePath = '/repo/notes.md'
+  ): void {
+    store.setState({
+      recentlyClosedEditorTabsByWorktree: {
+        'wt-1': [
+          {
+            filePath,
+            relativePath: filePath.replace('/repo/', ''),
+            worktreeId: 'wt-1',
+            language: 'markdown',
+            mode: 'edit',
+            dirtyDraftContent
+          }
+        ]
+      }
+    })
+  }
+
   it('reopens a closed mirrored editor tab as a local tab', () => {
     const store = createEditorStore()
     openMirroredEditor(store, '/repo/notes.md')
@@ -94,6 +127,35 @@ describe('createEditorSlice recently closed editor tabs', () => {
     expect(restored).toMatchObject({ filePath: '/repo/notes.md', isDirty: true })
     expect(store.getState().editorDrafts[restored.id]).toBe('rescued draft')
     expect(restored).not.toHaveProperty('dirtyDraftContent')
+  })
+
+  it('applies a recovered draft to a record that is already open and clean', () => {
+    const store = createEditorStore()
+    const openId = openLocalEditor(store)
+    parkRecoveredDraft(store, 'rescued draft')
+
+    expect(store.getState().reopenClosedEditorTab('wt-1')).toBe(true)
+
+    expect(store.getState().openFiles).toHaveLength(1)
+    expect(store.getState().editorDrafts[openId]).toBe('rescued draft')
+    expect(store.getState().openFiles[0].isDirty).toBe(true)
+    expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1']).toEqual([])
+  })
+
+  it('never overwrites the unsaved buffer of a record that is already open', () => {
+    const store = createEditorStore()
+    const openId = openLocalEditor(store)
+    store.getState().setEditorDraft(openId, 'live buffer')
+    store.getState().markFileDirty(openId, true)
+    parkRecoveredDraft(store, 'rescued draft')
+
+    expect(store.getState().reopenClosedEditorTab('wt-1')).toBe(true)
+
+    expect(store.getState().editorDrafts[openId]).toBe('live buffer')
+    expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1']).toEqual([
+      expect.objectContaining({ dirtyDraftContent: 'rescued draft' })
+    ])
+    expect(toastInfoMock).toHaveBeenCalledTimes(1)
   })
 
   it('reopens close-all mirrored editor tabs as local tabs', () => {

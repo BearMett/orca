@@ -171,6 +171,7 @@ function persistedShape(data, worktreeId, paths) {
     paths.includes(file.filePath)
   )
   const allTabs = session.unifiedTabs?.[worktreeId] ?? []
+  const tabEntityById = new Map(allTabs.map((tab) => [tab.id, tab.entityId]))
   const tabs = allTabs.filter((tab) => paths.includes(tab.entityId))
   return {
     openFileRecords: records.map((file) => ({
@@ -191,9 +192,11 @@ function persistedShape(data, worktreeId, paths) {
       activeTabId: group.activeTabId,
       tabOrderLength: group.tabOrder.length,
       recentTabIdsLength: group.recentTabIds?.length ?? 0,
-      pathReferences: [...group.tabOrder, ...(group.recentTabIds ?? [])].filter((id) =>
-        paths.some((p) => decodeURIComponent(id).includes(p))
-      )
+      // Why resolve the tab's entityId instead of matching the id text: a tab id is opaque, so a
+      // substring match reports references a tracked path never had.
+      pathReferences: [...group.tabOrder, ...(group.recentTabIds ?? [])]
+        .map((id) => ({ id, path: tabEntityById.get(id) ?? null }))
+        .filter((reference) => paths.includes(reference.path))
     }))
   }
 }
@@ -577,7 +580,9 @@ try {
       report.afterPreviousRecent.editorTabsForPaths.some((tab) => tab.entityId === trackedPath) ||
       (report.persistedAfterFlush.openFileCountByPath[trackedPath] ?? 0) > 0 ||
       report.persistedAfterFlush.editorTabsForPaths.some((tab) => tab.entityId === trackedPath) ||
-      report.persistedAfterFlush.tabGroups.some((group) => group.pathReferences.length > 0) ||
+      report.persistedAfterFlush.tabGroups.some((group) =>
+        group.pathReferences.some((reference) => reference.path === trackedPath)
+      ) ||
       (report.afterRestart.openFileCountByPath[trackedPath] ?? 0) > 0
   )
   report.survivingPaths = survivors

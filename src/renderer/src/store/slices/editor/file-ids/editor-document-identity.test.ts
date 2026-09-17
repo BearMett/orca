@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { buildPersistedEditorFileRecords } from '@/lib/workspace-session-editor-records'
+import type { PersistedOpenFile } from '../../../../../../shared/workspace-session-state-types'
 import type { OpenFile } from '../types/open-file'
+import { planHealedPersistedEditorFiles } from './hydrated-editor-owner-healing'
 import { editorDocumentIdentityKey } from './editor-document-identity'
 import { collectSameDocumentOpenFileIds } from './editor-file-ids'
 
@@ -107,5 +109,43 @@ describe('editor document identity', () => {
     expect(editorDocumentIdentityKey(file, 'env-a')).toBe(
       editorDocumentIdentityKey(openFile('right', { runtimeEnvironmentId: 'env-a' }))
     )
+  })
+})
+
+describe('editor document identity at the restore heal', () => {
+  function persistedFile(overrides: Partial<PersistedOpenFile> = {}): PersistedOpenFile {
+    return {
+      filePath: FILE_PATH,
+      relativePath: 'app.ts',
+      worktreeId: WORKTREE_ID,
+      language: 'typescript',
+      runtimeEnvironmentId: null,
+      ...overrides
+    }
+  }
+
+  function healedFiles(files: PersistedOpenFile[]): PersistedOpenFile[] {
+    return planHealedPersistedEditorFiles({
+      files,
+      worktreeId: WORKTREE_ID,
+      route: null,
+      persistedActiveFileId: null
+    }).files.map((healed) => healed.file)
+  }
+
+  it('merges records whose own worktreeId drifted away from the bucket they restore into', () => {
+    expect(
+      healedFiles([persistedFile(), persistedFile({ worktreeId: 'repo-1::/stale' })])
+    ).toHaveLength(1)
+  })
+
+  it('keeps the read-only log apart from the writable record the key separates', () => {
+    expect(healedFiles([persistedFile(), persistedFile({ readOnly: true })])).toHaveLength(2)
+  })
+
+  it('keeps an ssh-pinned record apart from the worktree-local one', () => {
+    expect(
+      healedFiles([persistedFile(), persistedFile({ externalSshTargetId: 'ssh-target' })])
+    ).toHaveLength(2)
   })
 })

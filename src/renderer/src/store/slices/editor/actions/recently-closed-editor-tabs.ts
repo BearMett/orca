@@ -1,3 +1,4 @@
+import { toast } from 'sonner'
 import type { EditorGet, EditorSet } from '../types/editor-set-get'
 import type { EditorSlice } from '../types/editor-slice'
 import {
@@ -30,10 +31,40 @@ export function createRecentlyClosedEditorTabs(
         }
       }))
       const { position, reopenId, dirtyDraftContent, ...file } = next
+      // Why captured before the open: openFile reuses a live same-owner record for this path, and
+      // the snapshot's draft must never overwrite whatever that record is already holding.
+      const beforeOpen = get()
+      const reusableRecordIds = new Set(beforeOpen.openFiles.map((f) => f.id))
+      const draftsBeforeOpen = beforeOpen.editorDrafts
+      const dirtyBeforeOpen = new Set(
+        beforeOpen.openFiles.filter((f) => f.isDirty === true).map((f) => f.id)
+      )
       const restoredFileId = get().openFile(file, {
         targetGroupId: position?.groupId,
         reopenId
       })
+      const reusedLiveRecord = reusableRecordIds.has(restoredFileId)
+      const reusedRecordHasUnsavedWork =
+        reusedLiveRecord &&
+        (draftsBeforeOpen[restoredFileId] !== undefined || dirtyBeforeOpen.has(restoredFileId))
+      if (dirtyDraftContent !== undefined && reusedRecordHasUnsavedWork) {
+        // Why put the snapshot back: its buffer has nowhere to restore to yet, and dropping it here
+        // would destroy the only copy of that unsaved text.
+        set((s) => ({
+          recentlyClosedEditorTabsByWorktree: {
+            ...s.recentlyClosedEditorTabsByWorktree,
+            [worktreeId]: [next, ...(s.recentlyClosedEditorTabsByWorktree[worktreeId] ?? [])].slice(
+              0,
+              MAX_RECENT_CLOSED_EDITOR_TABS
+            )
+          }
+        }))
+        toast.info(
+          `${file.relativePath || file.filePath} is already open with unsaved changes — its recovered draft is still on the reopen stack.`
+        )
+        restoreRecentlyClosedTabPosition(get, worktreeId, restoredFileId, position)
+        return true
+      }
       // Why: the close could not keep this buffer open (a same-owner duplicate held a rival draft), so reopen is its recovery path.
       if (dirtyDraftContent !== undefined) {
         get().setEditorDraft(restoredFileId, dirtyDraftContent)

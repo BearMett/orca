@@ -14,7 +14,8 @@ import {
   type WorktreeOperationRouteState
 } from '@/lib/worktree-operation-route'
 import { isEditorTabContentType } from '../tabs/editor-tab-content-type'
-import { buildOwnedEditorFileId, runtimeOwnerKey } from './editor-file-ids'
+import { buildOwnedEditorFileId } from './editor-file-ids'
+import { editorDocumentIdentityKey, runtimeOwnerKey } from './editor-document-identity'
 
 export type HealedPersistedEditorFile = {
   /** Survivor record, carrying the route owner when the heal applied. */
@@ -119,16 +120,6 @@ function isOwnerHealable(file: PersistedOpenFile): boolean {
   return file.readOnly !== true && file.liveTail !== true && !file.externalSshTargetId?.trim()
 }
 
-function identityKey(file: PersistedOpenFile, owner: string | null): string {
-  return JSON.stringify([
-    owner,
-    file.externalSshTargetId?.trim() || null,
-    file.filePath,
-    file.readOnly === true,
-    file.liveTail === true
-  ])
-}
-
 function restoredIdCandidates(file: PersistedOpenFile, worktreeId: string): string[] {
   return [
     file.filePath,
@@ -160,11 +151,14 @@ function countDistinctDrafts(files: readonly PersistedOpenFile[]): number {
 
 function groupByIdentity(
   files: readonly PersistedOpenFile[],
+  worktreeId: string,
   ownerOf: (file: PersistedOpenFile) => string | null
 ): Map<string, PersistedOpenFile[]> {
   const groups = new Map<string, PersistedOpenFile[]>()
   for (const file of files) {
-    const key = identityKey(file, ownerOf(file))
+    // Why the bucket's worktreeId, not the record's: a record whose own worktreeId drifted is
+    // exactly the corruption this heal merges, so it must not split the group.
+    const key = editorDocumentIdentityKey({ ...file, worktreeId }, ownerOf(file))
     const group = groups.get(key)
     if (group) {
       group.push(file)
@@ -204,10 +198,10 @@ export function planHealedPersistedEditorFiles(args: {
   }[] = []
   let divergentDraftGroupCount = 0
   const recoverableDrafts: PersistedOpenFile[] = []
-  for (const group of groupByIdentity(files, healedOwner).values()) {
+  for (const group of groupByIdentity(files, worktreeId, healedOwner).values()) {
     if (countDistinctDrafts(group) > 1) {
       divergentDraftGroupCount += 1
-      for (const verbatimGroup of groupByIdentity(group, verbatimOwner).values()) {
+      for (const verbatimGroup of groupByIdentity(group, worktreeId, verbatimOwner).values()) {
         const file = pickSurvivor(verbatimGroup, worktreeId, persistedActiveFileId)
         const superseded = verbatimGroup.filter((entry) => entry !== file)
         // Same owner and path as the survivor: no second id exists, so the draft leaves as a reopen snapshot.
@@ -249,7 +243,12 @@ export function planHealedPersistedEditorFiles(args: {
   const healedFiles = survivors.map((survivor) => {
     const { file, superseded, ownerRewritten } = survivor
     droppedCount += survivor.droppedCount
-    const ownerNormalized = route !== null && isOwnerHealable(file)
+    // Why the owner comparison: a divergent-draft survivor keeps its verbatim owner, so its tabs
+    // must not be re-stamped onto a route the record does not follow.
+    const ownerNormalized =
+      route !== null &&
+      isOwnerHealable(file) &&
+      runtimeOwnerKey(file.runtimeEnvironmentId) === runtimeOwnerKey(route.runtimeEnvironmentId)
     if (ownerRewritten) {
       ownerRewrittenCount += 1
     }

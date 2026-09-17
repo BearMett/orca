@@ -14,7 +14,9 @@ import { createStoreSessionMockApi } from './store-session-test-harness'
 import { createTestStore, makeWorktree } from './store-test-helpers'
 import {
   buildStaleEditorTabSession,
+  STALE_TAB_BRAND_COMPOSITE_TAB_ID,
   STALE_TAB_BRAND_PATH,
+  STALE_TAB_BRAND_PLAIN_TAB_ID,
   STALE_TAB_CSV_PATH,
   STALE_TAB_CSV_TAB_ID,
   STALE_TAB_REPO_ID,
@@ -184,6 +186,33 @@ describe('stale editor tab owner healing', () => {
       'draft from the local pane',
       'draft from the runtime pane'
     ])
+  })
+
+  it('never re-stamps the tab of a divergent-draft survivor that kept its own owner', () => {
+    const session = buildStaleEditorTabSession()
+    const [csv, brandLocal, brandRuntime] = session.openFilesByWorktree![STALE_TAB_WORKTREE_ID]
+    session.openFilesByWorktree![STALE_TAB_WORKTREE_ID] = [
+      csv,
+      { ...brandLocal, dirtyDraftContent: 'draft from the local pane' },
+      { ...brandRuntime, dirtyDraftContent: 'draft from the runtime pane' }
+    ]
+    const tabs = session.unifiedTabs![STALE_TAB_WORKTREE_ID]!
+    // The runtime pane's tab names that record's own owned id, so it follows the runtime survivor.
+    session.unifiedTabs![STALE_TAB_WORKTREE_ID] = tabs.map((tab) =>
+      tab.id === STALE_TAB_BRAND_COMPOSITE_TAB_ID
+        ? { ...tab, entityId: STALE_TAB_BRAND_COMPOSITE_TAB_ID }
+        : tab
+    )
+    const state = hydrate(prepareStore(['local']), session)
+
+    const stampByTabId = new Map(
+      (state.unifiedTabsByWorktree[STALE_TAB_WORKTREE_ID] ?? []).map((tab) => [
+        tab.id,
+        tab.executionHostId ?? null
+      ])
+    )
+    expect(stampByTabId.get(STALE_TAB_BRAND_COMPOSITE_TAB_ID)).toBe(RUNTIME_HOST_ID)
+    expect(stampByTabId.get(STALE_TAB_BRAND_PLAIN_TAB_ID)).toBe('local')
   })
 
   it('survives a write/restore round trip of two same-owner divergent drafts', () => {
