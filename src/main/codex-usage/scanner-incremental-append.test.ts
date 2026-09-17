@@ -4,12 +4,14 @@ import type * as NodeOs from 'node:os'
 import type * as NodeFs from 'node:fs'
 import { join } from 'node:path'
 
-const { getPathMock, homedirMock, streamReads } = vi.hoisted(() => {
+const { getPathMock, homedirMock, streamReads, onStreamOpen } = vi.hoisted(() => {
   const streamReads: { path: string; bytes: number }[] = []
   return {
     getPathMock: vi.fn<(name: string) => string>(),
     homedirMock: vi.fn<() => string>(),
-    streamReads
+    streamReads,
+    // Seam for mutating the tree mid-scan, between two files' parse reads.
+    onStreamOpen: { current: null as ((path: string, bounded: boolean) => void) | null }
   }
 })
 
@@ -42,6 +44,7 @@ vi.mock('node:fs', async () => {
       const size = actual.statSync(filePath).size
       const stop = range.end === undefined ? size : Math.min(size, range.end + 1)
       streamReads.push({ path: filePath, bytes: Math.max(0, stop - start) })
+      onStreamOpen.current?.(filePath, range.end !== undefined)
       return actual.createReadStream(path, options)
     }
   }
@@ -152,6 +155,7 @@ beforeEach(() => {
   sessionsDir = join(userDataDir, 'codex-runtime-home', 'home', 'sessions')
   mkdirSync(sessionsDir, { recursive: true })
   streamReads.length = 0
+  onStreamOpen.current = null
 })
 
 afterEach(() => {
@@ -291,6 +295,43 @@ describe('scanCodexUsageFiles incremental append', () => {
     writeFileSync(rolloutPath, `${sessionMeta('session-truncated')}${usageRecordRange(0, 5)}`)
     const second = await scanCodexUsageFiles([], first.processedFiles)
     expect(totalTokens(second.dailyAggregates)).toBe(5)
+  })
+
+  // The prefix is verified in the scanner's first pass and read in its second,
+  // so a rollout can shrink in between. The merged projection then keeps the
+  // whole pre-truncation history while the file is re-stat'd to its new, small
+  // size — a cache entry the reuse path matches on and serves forever.
+  it('reparses from the start when a rollout shrinks after its prefix was verified', async () => {
+    const driverPath = join(sessionsDir, 'aaaa-driver.jsonl')
+    const targetPath = join(sessionsDir, 'zzzz-shrinker.jsonl')
+    writeFileSync(driverPath, `${sessionMeta('session-driver')}${usageRecordRange(120, 123)}`)
+    writeFileSync(targetPath, `${sessionMeta('session-shrinker')}${usageRecordRange(0, 20)}`)
+
+    const first = await scanCodexUsageFiles([], [])
+    expect(totalTokens(first.dailyAggregates)).toBe(23)
+
+    appendFileSync(driverPath, usageRecordRange(123, 124), 'utf-8')
+    appendFileSync(targetPath, usageRecordRange(20, 22), 'utf-8')
+    const truncated = `${sessionMeta('session-shrinker')}${usageRecordRange(0, 5)}`
+    onStreamOpen.current = (path, bounded) => {
+      // The driver's unbounded parse read runs after every file's prefix has
+      // been verified and before the target is re-stat'd: the exact window.
+      if (path === driverPath && !bounded) {
+        onStreamOpen.current = null
+        writeFileSync(targetPath, truncated, 'utf-8')
+      }
+    }
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    expect(onStreamOpen.current).toBeNull()
+    expect(totalTokens(second.dailyAggregates)).toBe(9)
+
+    // The kill: size and mtime now agree with disk, so a stale merged total
+    // would be reused unconditionally and no digest would ever get to reject it.
+    const cached = second.processedFiles.find((file) => file.path === targetPath)
+    expect(cached?.size).toBe(statSync(targetPath).size)
+    const third = await scanCodexUsageFiles([], second.processedFiles)
+    expect(totalTokens(third.dailyAggregates)).toBe(9)
   })
 
   it('falls back to a full reparse when a rollout is rewritten at the same size', async () => {
@@ -479,6 +520,35 @@ describe('scanCodexUsageFiles incremental append', () => {
     const second = await scanCodexUsageFiles([], first.processedFiles)
     expect(totalTokens(second.dailyAggregates)).toBe(5)
     expect(second.sessions[0]?.eventCount).toBe(5)
+  })
+
+  // The case above stops at the parser: its tail is truncated JSON, so no event
+  // comes out of it. A tail that is complete JSON with only the newline missing
+  // is counted, yet the next scan re-reads it — the resume offset must exclude
+  // it or the record lands in the totals twice.
+  it('does not double-count a counted tail whose newline was not yet written', async () => {
+    const rolloutPath = join(sessionsDir, 'rollout-unflushed-newline.jsonl')
+    const complete = usageRecordRange(0, 3)
+    const pending = usageRecord('2026-05-26T12:59:00.000Z', 1, 4)
+    writeFileSync(
+      rolloutPath,
+      `${sessionMeta('session-unflushed')}${complete}${pending.slice(0, -1)}`,
+      'utf-8'
+    )
+
+    const first = await scanCodexUsageFiles([], [])
+    // The unterminated line is valid JSON, so it is parsed and counted here.
+    expect(totalTokens(first.dailyAggregates)).toBe(4)
+    expect(first.sessions[0]?.eventCount).toBe(4)
+
+    // The writer flushes the newline and appends one more record.
+    appendFileSync(rolloutPath, `\n${usageRecordRange(4, 5)}`, 'utf-8')
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    const fromScratch = await scanCodexUsageFiles([], [])
+    expect(totalTokens(second.dailyAggregates)).toBe(5)
+    expect(second.sessions[0]?.eventCount).toBe(5)
+    expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
   })
 
   it('reads appended bytes only when the append shares the cached mtime', async () => {

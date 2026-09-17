@@ -132,16 +132,26 @@ export async function parseCodexUsageFile(
 
   // A counted-but-unterminated tail would be counted again on resume, and a
   // legacy suffix offset is recomputed per scan, so neither may be resumed.
-  const parseResumeState =
-    partialTailProducedEvent || legacySourceSkipBytes > 0
-      ? null
-      : await buildCodexRolloutResumeState(
-          filePath,
-          parsedBytes,
-          resumeContext,
-          // Already verified against the file at the top of this scan.
-          options.resume?.state.headDigest ?? null
-        )
+  const resumeStateSuppressed = partialTailProducedEvent || legacySourceSkipBytes > 0
+  const parseResumeState = resumeStateSuppressed
+    ? null
+    : await buildCodexRolloutResumeState(
+        filePath,
+        parsedBytes,
+        resumeContext,
+        // Already verified against the file at the top of this scan.
+        options.resume?.state.headDigest ?? null
+      )
+
+  // Why: the builder returns null only on a short read, so the file no longer
+  // reaches `parsedBytes`. It shrank past the prefix this parse merged history
+  // for, and `processedFile` already re-stat'd to the smaller size — persisting
+  // that pair lets the next scan reuse a pre-truncation total forever. An
+  // unterminated tail proves the file still runs past the resume offset, so it
+  // cannot be this case.
+  if (options.resume && !resumeStateSuppressed && parseResumeState === null) {
+    return parseCodexUsageFile(filePath, worktrees, { ...options, resume: undefined })
+  }
 
   const appended = codexUsageAggregation.aggregate(events)
   const previous = options.resume?.previous

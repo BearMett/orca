@@ -613,6 +613,82 @@ describe('listCodexSessionFiles', () => {
     ).toBe(25)
   })
 
+  // Bridge markers can appear on a source file that already has a resume state:
+  // the copy is made after a scan, so the scanner sees a non-legacy cache and a
+  // legacy suffix offset at once. Resuming would extend the cached full-history
+  // projection instead of restarting as a suffix-only parse, which loses the
+  // total-only baseline the suffix depends on and recounts the copied records.
+  it('reparses in full when bridge markers appear on an already-resumable source', async () => {
+    const runtimeSessionsDir = join(userDataDir, 'codex-runtime-home', 'home', 'sessions')
+    const runtimeBridgeMarkerDir = join(
+      userDataDir,
+      'codex-runtime-home',
+      'home',
+      '.orca-session-copies'
+    )
+    const systemSessionsDir = join(fakeHomeDir, '.codex', 'sessions')
+    mkdirSync(runtimeSessionsDir, { recursive: true })
+    mkdirSync(systemSessionsDir, { recursive: true })
+    const systemSessionPath = join(systemSessionsDir, 'system.jsonl')
+    const runtimeSessionPath = join(runtimeSessionsDir, 'system.jsonl')
+    const meta = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'legacy-session', cwd: join(fakeHomeDir, 'repo') }
+    })}\n`
+    const scannedPrefix = `${meta}${usageRecord('2026-05-26T12:00:00.000Z', 10)}`
+    writeFileSync(systemSessionPath, scannedPrefix, 'utf-8')
+
+    // No markers yet, so this scan records a plain incremental resume point.
+    const first = await scanCodexUsageFiles([], [])
+    expect(
+      first.processedFiles.find((file) => file.path === systemSessionPath)?.parseResumeState
+        ?.parsedBytes
+    ).toBe(Buffer.byteLength(scannedPrefix))
+
+    // The source grows, then the legacy copy is taken: the copied prefix now
+    // reaches past the recorded resume offset.
+    const copiedPrefix = `${scannedPrefix}${usageRecord('2026-05-26T12:01:00.000Z', 3, 13)}`
+    writeFileSync(systemSessionPath, copiedPrefix, 'utf-8')
+    writeFileSync(runtimeSessionPath, copiedPrefix, 'utf-8')
+    mkdirSync(runtimeBridgeMarkerDir, { recursive: true })
+    const sourceStat = lstatSync(systemSessionPath)
+    const targetStat = lstatSync(runtimeSessionPath)
+    writeFileSync(
+      join(runtimeBridgeMarkerDir, 'system.jsonl.json'),
+      `${JSON.stringify({
+        sourcePath: systemSessionPath,
+        sourceSize: sourceStat.size,
+        sourceMtimeMs: sourceStat.mtimeMs,
+        targetSize: targetStat.size,
+        targetMtimeMs: targetStat.mtimeMs
+      })}\n`,
+      'utf-8'
+    )
+    writeFileSync(
+      systemSessionPath,
+      [
+        copiedPrefix,
+        totalOnlyUsageRecord('2026-05-26T12:02:00.000Z', 30),
+        totalOnlyUsageRecord('2026-05-26T12:03:00.000Z', 34)
+      ].join('')
+    )
+    writeFileSync(
+      runtimeSessionPath,
+      `${copiedPrefix}${usageRecord('2026-05-26T12:04:00.000Z', 5, 18)}`
+    )
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+
+    // 10 + 3 copied prefix, 5 runtime-only, and the source suffix contributing
+    // 34 - 30 once its leading total-only record is read as a baseline.
+    expect(
+      second.dailyAggregates.reduce((total, aggregate) => total + aggregate.totalTokens, 0)
+    ).toBe(22)
+    expect(
+      second.dailyAggregates.reduce((total, aggregate) => total + aggregate.eventCount, 0)
+    ).toBe(4)
+  })
+
   it('treats a leading total-only source suffix record as baseline', async () => {
     const runtimeSessionsDir = join(userDataDir, 'codex-runtime-home', 'home', 'sessions')
     const runtimeBridgeMarkerDir = join(
