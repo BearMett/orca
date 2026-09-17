@@ -10,16 +10,22 @@ import { UsageScanWorkerClient, scanCodexUsageOnWorker } from './usage-scan-work
 import type { UsageScanWorktreeRef } from './usage-provider-contract'
 
 // Why this test exists: "the scan no longer blocks the main process" is not a
-// stopwatch claim. It measures the *calling* thread's event-loop utilization —
-// the fraction of wall time that thread spent running JS rather than parked in
-// the loop's poll phase. A scan on the calling thread pins that near 1.0; the
-// same scan on a worker leaves it near 0, because the caller only awaits a
-// message. The ratio is self-calibrating, so CI load moves both legs together
-// (issue #18788) instead of tipping a fixed millisecond threshold.
+// stopwatch claim. It measures the *calling* thread's event-loop active time —
+// the milliseconds that thread spent running JS rather than parked in the
+// loop's poll phase.
 //
-// The second case is the mutation check kept in the suite: it runs the identical
-// scan on the calling thread and asserts the oracle *does* see the occupancy.
-// Without it, a worker route that silently degraded to a no-op would still pass.
+// One case runs both arms over one corpus so they are compared against each
+// other rather than each against a fixed threshold: the identical scan goes
+// first through the pre-worker calling-thread path, then through the worker,
+// and the worker arm must cost the caller a fraction of the JS time.
+//
+// Active milliseconds, not the active/wall fraction (issue #18788): CPU
+// contention drags the calling-thread arm's *fraction* down toward the
+// worker's — a loaded ubuntu runner measured 0.76 against a 0.8 floor — while
+// stretching wall time, which widens the millisecond gap instead.
+//
+// The presence preconditions on both arms are load-bearing. An arm that
+// silently scanned nothing would otherwise satisfy the comparison trivially.
 
 const FILE_COUNT = 600
 const EVENTS_PER_FILE = 60
@@ -94,7 +100,9 @@ function writeCorpus(root: string): void {
 }
 
 type Occupancy = {
-  /** Fraction of the measured span the calling thread spent running JS. */
+  /** Milliseconds the calling thread spent running JS during the span. */
+  activeMs: number
+  /** Same span as a fraction of wall time; reported, not asserted on. */
   activeRatio: number
   wallMs: number
 }
@@ -107,7 +115,14 @@ async function measureCallerOccupancy<T>(
   const value = await run()
   const wallMs = performance.now() - startedAt
   const delta = performance.eventLoopUtilization(before)
-  return { value, occupancy: { activeRatio: delta.active / wallMs, wallMs } }
+  return {
+    value,
+    occupancy: { activeMs: delta.active, activeRatio: delta.active / wallMs, wallMs }
+  }
+}
+
+function formatOccupancy(label: string, occupancy: Occupancy): string {
+  return `${label}: active ${occupancy.activeMs.toFixed(1)}ms of ${occupancy.wallMs.toFixed(1)}ms wall (ratio ${occupancy.activeRatio.toFixed(3)})`
 }
 
 function createWorkerClient(): UsageScanWorkerClient {
@@ -165,31 +180,32 @@ afterAll(() => {
 })
 
 describe('usage scan worker event-loop occupancy', () => {
-  it('leaves the calling event loop idle while the worker scans', async () => {
+  it('costs the calling thread a fraction of the JS time the same scan does inline', async () => {
+    // Calling thread first: the baseline is measured with no worker alive, and
+    // the worker arm then reads an OS cache the inline arm already warmed,
+    // which can only understate the gap being asserted.
+    const caller = await measureCallerOccupancy(() => scanCodexUsageOnCallingThread())
+    expect(caller.value.processedFiles).toHaveLength(FILE_COUNT)
+    expect(caller.value.sessions).toHaveLength(FILE_COUNT)
+    expect(caller.value.dailyAggregates).toHaveLength(1)
+    expect(caller.value.dailyAggregates[0]?.eventCount).toBe(EXPECTED_EVENTS)
+
     const client = createWorkerClient()
-    const { value, occupancy } = await measureCallerOccupancy(() =>
+    const worker = await measureCallerOccupancy(() =>
       withCorpusEnv(() => scanCodexUsageOnWorker((body) => client.scan(body), WORKTREES, []))
     )
+    expect(worker.value.source).toHaveLength(FILE_COUNT)
+    expect(worker.value.sessions).toHaveLength(FILE_COUNT)
+    expect(worker.value.dailyAggregates).toHaveLength(1)
+    expect(worker.value.dailyAggregates[0]?.eventCount).toBe(EXPECTED_EVENTS)
 
-    // Presence precondition: an empty or skipped scan must not be able to pass
-    // the occupancy assertion by simply doing no work.
-    expect(value.source).toHaveLength(FILE_COUNT)
-    expect(value.sessions).toHaveLength(FILE_COUNT)
-    expect(value.dailyAggregates).toHaveLength(1)
-    expect(value.dailyAggregates[0]?.eventCount).toBe(EXPECTED_EVENTS)
-
-    expect(occupancy.activeRatio).toBeLessThan(0.5)
-  }, 120_000)
-
-  it('sees the occupancy when the same scan runs on the calling thread', async () => {
-    // The mutation check, kept resident: this is the pre-worker code path.
-    const { value, occupancy } = await measureCallerOccupancy(() =>
-      scanCodexUsageOnCallingThread()
-    )
-
-    expect(value.processedFiles).toHaveLength(FILE_COUNT)
-    expect(value.sessions).toHaveLength(FILE_COUNT)
-    expect(occupancy.activeRatio).toBeGreaterThan(0.8)
+    // The caller still pays to post the request and structured-clone a
+    // 600-file result back, so this is a fifth, not a rout. Measured margin is
+    // ~50x idle and ~90x under CPU contention.
+    expect(
+      worker.occupancy.activeMs,
+      `${formatOccupancy('worker', worker.occupancy)}; ${formatOccupancy('calling thread', caller.occupancy)}`
+    ).toBeLessThan(caller.occupancy.activeMs / 5)
   }, 120_000)
 })
 
