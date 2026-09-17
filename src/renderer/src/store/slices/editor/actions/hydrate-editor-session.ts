@@ -9,6 +9,7 @@ import type { AppState } from '../../../types'
 import type { PersistedOpenFile } from '../../../../../../shared/workspace-session-state-types'
 import type { ClosedEditorTabSnapshot, OpenFile } from '../types/open-file'
 import {
+  countRecoveredDraftsLostToCap,
   parkRecoveredEditorDrafts,
   type ParkedRecoveredEditorDrafts
 } from './parked-recovered-editor-drafts'
@@ -198,6 +199,8 @@ export function createHydrateEditorSession(
           }
           // Why after the loop: drafts parked by the id-collision skip above are only known now.
           const parkedDraftCount = recoveredDraftTabsByWorktree[worktreeId]?.length ?? 0
+          // Why reported: the reopen stack has a cap, and drafts past it are gone for good.
+          const lostDraftCount = countRecoveredDraftsLostToCap(parkedDraftCount)
           if (
             healed.droppedCount > 0 ||
             healed.ownerRewrittenCount > 0 ||
@@ -205,7 +208,7 @@ export function createHydrateEditorSession(
             parkedDraftCount > 0
           ) {
             console.warn(
-              `[editor-hydration] healed persisted editor state for ${worktreeId}: dropped ${healed.droppedCount} duplicate record(s), re-owned ${healed.ownerRewrittenCount}, kept ${healed.divergentDraftGroupCount} divergent-draft group(s) apart, ${parkedDraftCount} draft(s) moved to the reopen stack`
+              `[editor-hydration] healed persisted editor state for ${worktreeId}: dropped ${healed.droppedCount} duplicate record(s), re-owned ${healed.ownerRewrittenCount}, kept ${healed.divergentDraftGroupCount} divergent-draft group(s) apart, ${parkedDraftCount - lostDraftCount} draft(s) moved to the reopen stack, ${lostDraftCount} lost to the reopen-stack cap`
             )
           }
         }

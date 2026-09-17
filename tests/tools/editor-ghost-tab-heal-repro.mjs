@@ -31,6 +31,13 @@
  * copied rows keep ABSOLUTE file paths — a restored dirty draft would otherwise be autosaved
  * straight into the developer's real file. This tool investigates tab identity, not drafts.
  *
+ * Stripping the drafts changes what the heal does with duplicates: a drafted record would otherwise
+ * win `pickSurvivor`, and the divergent-draft branch that keeps two rows apart never runs here. The
+ * identity repro is unaffected — every shape it tracks is decided by (worktree, owner, path).
+ *
+ * Tabs are matched to paths through `editorEntityPath`, because a healed record's tab carries the
+ * owned `editor:<worktree>:<runtime>:<path>` id rather than the bare path.
+ *
  * Exit codes: 0 healed and nothing came back, 1 a tracked path survived, 2 nothing to repro.
  */
 
@@ -47,12 +54,18 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {
+  EDITOR_ENTITY_PATH_INIT_SCRIPT,
+  editorEntityPath,
+  persistedShape,
+  printScanTable,
+  scanWorkspaceSession
+} from './editor-ghost-tab-session-scan.mjs'
 
 if (process.env.ORCA_BACKGROUND_LAUNCH !== '1') {
   throw new Error('Requires ORCA_BACKGROUND_LAUNCH=1')
 }
 
-const EDITOR_CONTENT_TYPES = new Set(['editor', 'diff', 'conflict-review', 'check-details'])
 const PROFILE_ID = 'local-default'
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const MAIN_ENTRY = path.join(REPO_ROOT, 'out', 'main', 'index.js')
@@ -98,133 +111,6 @@ function defaultDataFile() {
   return path.join(defaultUserDataPath(), 'profiles', PROFILE_ID, 'orca-data.json')
 }
 
-/** The owner a persisted record names, matching the store's runtimeOwnerKey. */
-function ownerKey(file) {
-  return file.runtimeEnvironmentId?.trim() || null
-}
-
-function editorTabsByEntity(session, worktreeId) {
-  const byEntity = new Map()
-  for (const tab of session.unifiedTabs?.[worktreeId] ?? []) {
-    if (!EDITOR_CONTENT_TYPES.has(tab.contentType)) {
-      continue
-    }
-    const tabs = byEntity.get(tab.entityId) ?? []
-    tabs.push(tab)
-    byEntity.set(tab.entityId, tabs)
-  }
-  return byEntity
-}
-
-/**
- * Affected (worktree, path) pairs: more than one OpenFile record, owners that disagree, or an
- * editor tab repeated inside one tab group — the three shapes that resurrect a closed tab.
- */
-function scanWorkspaceSession(session) {
-  const affectedByWorktree = new Map()
-  for (const [worktreeId, files] of Object.entries(session?.openFilesByWorktree ?? {})) {
-    const ownersByPath = new Map()
-    for (const file of files) {
-      ownersByPath.set(file.filePath, [...(ownersByPath.get(file.filePath) ?? []), ownerKey(file)])
-    }
-    const tabsByEntity = editorTabsByEntity(session, worktreeId)
-    const affected = []
-    for (const [filePath, owners] of ownersByPath) {
-      const tabs = tabsByEntity.get(filePath) ?? []
-      const tabsPerGroup = new Map()
-      for (const tab of tabs) {
-        tabsPerGroup.set(tab.groupId, (tabsPerGroup.get(tab.groupId) ?? 0) + 1)
-      }
-      const repeatedInGroup = [...tabsPerGroup.values()].filter((count) => count > 1).length
-      const distinctOwners = [...new Set(owners)]
-      if (owners.length > 1 || distinctOwners.length > 1 || repeatedInGroup > 0) {
-        affected.push({
-          filePath,
-          recordCount: owners.length,
-          owners: distinctOwners,
-          editorTabCount: tabs.length,
-          repeatedInGroup
-        })
-      }
-    }
-    if (affected.length > 0) {
-      affectedByWorktree.set(worktreeId, affected)
-    }
-  }
-  return affectedByWorktree
-}
-
-function printScanTable(affectedByWorktree) {
-  console.error('[heal-repro] affected (worktree, path) pairs:')
-  for (const [worktreeId, affected] of affectedByWorktree) {
-    console.error(`  ${worktreeId}`)
-    for (const entry of affected) {
-      const owners = entry.owners.map((owner) => owner ?? 'null').join(',')
-      console.error(
-        `    records=${entry.recordCount} owners=[${owners}] editorTabs=${entry.editorTabCount}` +
-          ` repeatedInGroup=${entry.repeatedInGroup}  ${entry.filePath}`
-      )
-    }
-  }
-}
-
-/** Why: a tab id is opaque and may hold a stray `%`, and one bad id must not abort the whole run. */
-function safeDecode(id) {
-  try {
-    return decodeURIComponent(id)
-  } catch (error) {
-    void error
-    return id
-  }
-}
-
-/** Snapshot of the persisted session for the tracked paths — the same fields the store reader returns. */
-function persistedShape(data, worktreeId, paths) {
-  const session = data.workspaceSession ?? {}
-  const records = (session.openFilesByWorktree?.[worktreeId] ?? []).filter((file) =>
-    paths.includes(file.filePath)
-  )
-  const allTabs = session.unifiedTabs?.[worktreeId] ?? []
-  const tabEntityById = new Map(allTabs.map((tab) => [tab.id, tab.entityId]))
-  const tabs = allTabs.filter((tab) => paths.includes(tab.entityId))
-  return {
-    openFileRecords: records.map((file) => ({
-      filePath: file.filePath,
-      runtimeEnvironmentId: ownerKey(file)
-    })),
-    openFileCountByPath: Object.fromEntries(
-      paths.map((p) => [p, records.filter((file) => file.filePath === p).length])
-    ),
-    editorTabsForPaths: tabs.map((tab) => ({
-      id: tab.id,
-      entityId: tab.entityId,
-      executionHostId: tab.executionHostId ?? null
-    })),
-    totalUnifiedTabsForWorktree: allTabs.length,
-    tabGroups: (session.tabGroups?.[worktreeId] ?? []).map((group) => ({
-      id: group.id,
-      activeTabId: group.activeTabId,
-      tabOrderLength: group.tabOrder.length,
-      recentTabIdsLength: group.recentTabIds?.length ?? 0,
-      // Why entityId first, text match second: the fallback only recovers dangling entries whose id
-      // embeds the encoded path (bare-path and composite editor ids); a dangling bare-uuid tab id
-      // carries no path and stays invisible here.
-      pathReferences: [...group.tabOrder, ...(group.recentTabIds ?? [])]
-        .map((id) => {
-          const path = tabEntityById.get(id)
-          return path !== undefined
-            ? { id, path }
-            : {
-                id,
-                path: paths.find((p) => safeDecode(id).includes(p)) ?? null,
-                dangling: true
-              }
-        })
-        .filter((reference) => paths.includes(reference.path))
-    }))
-  }
-}
-
 /** Runs in the renderer against the dev-exposed store; returns only the fields under test. */
 const readStore = ({ worktreeId, paths }) => {
   const state = window.__store?.getState()
@@ -236,7 +122,9 @@ const readStore = ({ worktreeId, paths }) => {
     (file) => file.worktreeId === worktreeId && paths.includes(file.filePath)
   )
   const allTabs = state.unifiedTabsByWorktree?.[worktreeId] ?? []
-  const tabs = allTabs.filter((tab) => paths.includes(tab.entityId))
+  const entityPath = window.__editorEntityPath
+  const tabs = allTabs.filter((tab) => paths.includes(entityPath(tab.entityId)))
+  const tabEntityById = new Map(allTabs.map((tab) => [tab.id, tab.entityId]))
   return {
     storeReady: true,
     workspaceSessionReady: state.workspaceSessionReady,
@@ -277,7 +165,11 @@ const readStore = ({ worktreeId, paths }) => {
       id: group.id,
       activeTabId: group.activeTabId,
       tabOrder: group.tabOrder ?? [],
-      recentTabIds: group.recentTabIds ?? []
+      recentTabIds: group.recentTabIds ?? [],
+      // A group entry still naming a tracked path is a ghost the tab strip can bring back.
+      pathReferences: [...(group.tabOrder ?? []), ...(group.recentTabIds ?? [])]
+        .map((id) => ({ id, path: entityPath(tabEntityById.get(id) ?? id) }))
+        .filter((reference) => paths.includes(reference.path))
     })),
     recentlyClosedEditorTabs: (state.recentlyClosedEditorTabsByWorktree?.[worktreeId] ?? []).map(
       (snapshot) => snapshot.filePath ?? null
@@ -295,7 +187,7 @@ const walkMostRecentlyUsed = async ({ worktreeId, paths }) => {
   const steps = []
   for (const filePath of paths) {
     const tab = (store.getState().unifiedTabsByWorktree?.[worktreeId] ?? []).find(
-      (candidate) => candidate.entityId === filePath
+      (candidate) => window.__editorEntityPath(candidate.entityId) === filePath
     )
     if (!tab) {
       steps.push({ filePath, activated: false })
@@ -479,6 +371,8 @@ async function launchHidden(userDataDir, healLines) {
     }
   })
   const page = await app.firstWindow({ timeout: 120_000 })
+  await page.addInitScript(EDITOR_ENTITY_PATH_INIT_SCRIPT)
+  await page.evaluate(EDITOR_ENTITY_PATH_INIT_SCRIPT)
   page.on('console', (message) => {
     const text = message.text()
     if (text.includes('[editor-hydration]')) {
@@ -626,16 +520,24 @@ try {
   )
   writeEvidence('7-persisted-after-restart.json', report.persistedAfterRestart)
 
-  const survivors = trackedPaths.filter(
-    (trackedPath) =>
-      (report.afterPreviousRecent.openFileCountByPath[trackedPath] ?? 0) > 0 ||
-      report.afterPreviousRecent.editorTabsForPaths.some((tab) => tab.entityId === trackedPath) ||
-      (report.persistedAfterFlush.openFileCountByPath[trackedPath] ?? 0) > 0 ||
-      report.persistedAfterFlush.editorTabsForPaths.some((tab) => tab.entityId === trackedPath) ||
-      report.persistedAfterFlush.tabGroups.some((group) =>
-        group.pathReferences.some((reference) => reference.path === trackedPath)
+  // Why every snapshot after the close: a ghost that skips one of them still comes back from the
+  // next, and the restart pass is where a record the flush kept finally resurfaces.
+  const survivesIn = (snapshot, trackedPath) =>
+    Boolean(snapshot) &&
+    ((snapshot.openFileCountByPath?.[trackedPath] ?? 0) > 0 ||
+      (snapshot.editorTabsForPaths ?? []).some(
+        (tab) => editorEntityPath(tab.entityId) === trackedPath
       ) ||
-      (report.afterRestart.openFileCountByPath[trackedPath] ?? 0) > 0
+      [...(snapshot.tabGroups ?? []), ...(snapshot.groups ?? [])].some((group) =>
+        (group.pathReferences ?? []).some((reference) => reference.path === trackedPath)
+      ))
+  const survivors = trackedPaths.filter((trackedPath) =>
+    [
+      report.afterPreviousRecent,
+      report.persistedAfterFlush,
+      report.afterRestart,
+      report.persistedAfterRestart
+    ].some((snapshot) => survivesIn(snapshot, trackedPath))
   )
   report.survivingPaths = survivors
   exitCode = survivors.length > 0 ? 1 : 0

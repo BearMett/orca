@@ -292,6 +292,23 @@ describe('stale editor tab owner healing', () => {
     expect(brand?.lastKnownDiskSignature).toBe('sig-1')
     expect(state.editorDrafts[brand!.id]).toBe('')
   })
+
+  it('keeps the disk baseline an equal-draft duplicate carries', () => {
+    const session = buildStaleEditorTabSession()
+    const records = session.openFilesByWorktree![STALE_TAB_WORKTREE_ID]
+    records[2] = { ...records[2], dirtyDraftContent: 'same text' }
+    records[4] = {
+      ...records[4],
+      dirtyDraftContent: 'same text',
+      lastKnownDiskSignature: 'sig-1'
+    }
+    const state = hydrate(prepareStore(['local']), session)
+
+    const brand = state.openFiles.find((file) => file.filePath === STALE_TAB_BRAND_PATH)
+    expect(state.editorDrafts[brand!.id]).toBe('same text')
+    expect(brand?.lastKnownDiskSignature).toBe('sig-1')
+    expect(brand?.pendingDiskBaselineVerification).toBe(true)
+  })
 })
 
 const FOLDER_WORKSPACE_ID = 'folder-1'

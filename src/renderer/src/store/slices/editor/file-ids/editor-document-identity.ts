@@ -25,6 +25,14 @@ export type EditorDocumentIdentityFields = {
  * `owner` defaults to the record's own runtime owner; the restore heal passes the route owner it
  * is normalizing onto so pre- and post-heal owners group together.
  */
+/**
+ * Same document, ignoring the read-only/live-tail surface flags. `openFile`'s reuse rule ignores
+ * both, so a caller that must predict which record an open will land on compares on this key.
+ */
+export function editorDocumentPathOwnerKey(file: EditorDocumentIdentityFields): string {
+  return editorDocumentIdentityKey({ ...file, readOnly: false, liveTail: false })
+}
+
 export function editorDocumentIdentityKey(
   file: EditorDocumentIdentityFields,
   owner: string | null = runtimeOwnerKey(file.runtimeEnvironmentId)

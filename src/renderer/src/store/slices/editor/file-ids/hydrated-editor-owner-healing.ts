@@ -136,7 +136,15 @@ function pickSurvivor(
 ): PersistedOpenFile {
   const drafted = files.find((file) => file.dirtyDraftContent !== undefined)
   if (drafted) {
-    return drafted
+    // Why the equal-draft scan: same text means the same document, so keep the copy that still
+    // carries the disk baseline — the restored draft has nothing to verify against without it.
+    return (
+      files.find(
+        (file) =>
+          file.dirtyDraftContent === drafted.dirtyDraftContent &&
+          file.lastKnownDiskSignature !== undefined
+      ) ?? drafted
+    )
   }
   const active =
     persistedActiveFileId != null

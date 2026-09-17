@@ -10,7 +10,8 @@ import { notifyHostOfMirroredEditorClose } from '@/runtime/close-mirrored-editor
 import { buildEditorActiveResult } from '../tabs/editor-open-target-group'
 import { type ClosedEditorTabSnapshot, MAX_RECENT_CLOSED_EDITOR_TABS } from '../types/open-file'
 import { deferRecoveredEditorDraft } from './parked-recovered-editor-drafts'
-import { editorDocumentIdentityKey } from '../file-ids/editor-document-identity'
+import { editorDocumentPathOwnerKey } from '../file-ids/editor-document-identity'
+import { recoveredDraftBlockedMessage } from './recovered-draft-block-notice'
 import { getReusableOpenFileModes, matchesEditorMode } from '../file-ids/editor-file-ids'
 import {
   deleteUntouchedUntitledFile,
@@ -35,14 +36,11 @@ export function createRecentlyClosedEditorTabs(
         }
       }))
       const { position, reopenId, dirtyDraftContent, ...file } = next
-      /** The parked draft stayed parked; name the document and what unblocks it. */
-      const parkedDraftBlockedToast = (reason: string): void => {
-        toast.info(`${file.relativePath || file.filePath} ${reason}`)
-      }
       const collisionToast = (): void => {
-        parkedDraftBlockedToast(
-          'is open with unsaved changes. Save or close it, then reopen to recover the parked draft.'
-        )
+        toast.info(recoveredDraftBlockedMessage('unsaved-rival', file))
+      }
+      const readOnlyCollisionToast = (): void => {
+        toast.info(recoveredDraftBlockedMessage('read-only', file))
       }
       // Why both halves: setActiveFile promotes the record's unified tab inside its group, and the
       // open-target result raises the editor surface the normal open path would have raised.
@@ -54,13 +52,26 @@ export function createRecentlyClosedEditorTabs(
         // Why decided before the open: openFile would give the live record a second unified tab in
         // the snapshot's group, and the writes below would then land on the wrong document.
         const beforeCollisionCheck = get()
-        const identity = editorDocumentIdentityKey(file)
+        // Why the surface-blind key: openFile's reuse rule ignores readOnly/liveTail, so a writable
+        // snapshot whose identity key differs from a live read-only log still lands on that record.
+        const identity = editorDocumentPathOwnerKey(file)
         const modes = getReusableOpenFileModes(file.mode)
-        const live = beforeCollisionCheck.openFiles.find(
+        const matches = beforeCollisionCheck.openFiles.filter(
           (candidate) =>
-            matchesEditorMode(candidate, modes) && editorDocumentIdentityKey(candidate) === identity
+            matchesEditorMode(candidate, modes) &&
+            editorDocumentPathOwnerKey(candidate) === identity
         )
+        // Why writable first: a read-only twin only blocks the draft when nothing writable can hold it.
+        const live = matches.find((candidate) => candidate.readOnly !== true) ?? matches[0]
         const liveDraft = live ? beforeCollisionCheck.editorDrafts[live.id] : undefined
+        if (live?.readOnly === true) {
+          // Why no open: openFile would reuse this record and hang a second unified tab off the
+          // snapshot's group, and a read-only record can hold neither the draft nor its baseline.
+          set((s) => deferRecoveredEditorDraft(s, worktreeId, next))
+          activateLiveRecord(live.id)
+          readOnlyCollisionToast()
+          return true
+        }
         if (live && liveDraft === dirtyDraftContent) {
           // Why nothing is written: the live record already holds this exact text, so the draft and
           // baseline writes would only replace a newer baseline with the snapshot's older one.
@@ -97,22 +108,19 @@ export function createRecentlyClosedEditorTabs(
         // Why: openFile's reuse rule ignores readOnly, and setEditorDraft/markFileDirty hard no-op
         // on a read-only record — writing the draft below would consume the snapshot and lose it.
         set((s) => deferRecoveredEditorDraft(s, worktreeId, next))
-        parkedDraftBlockedToast(
-          'is open read-only. Close it, then reopen to recover the parked draft.'
-        )
+        readOnlyCollisionToast()
         return true
       }
       const reusedLiveRecord = reusableRecordIds.has(restoredFileId)
       const reusedRecordHasUnsavedWork =
         reusedLiveRecord &&
         (draftsBeforeOpen[restoredFileId] !== undefined || dirtyBeforeOpen.has(restoredFileId))
-      if (
-        dirtyDraftContent !== undefined &&
-        reusedRecordHasUnsavedWork &&
-        // Why: the live record already holds this exact text, so parking would only make the
-        // snapshot unreachable — re-applying it is a no-op.
-        draftsBeforeOpen[restoredFileId] !== dirtyDraftContent
-      ) {
+      if (dirtyDraftContent !== undefined && reusedRecordHasUnsavedWork) {
+        if (draftsBeforeOpen[restoredFileId] === dirtyDraftContent) {
+          // Why nothing is written: the reused record already holds this exact text, so the draft
+          // and baseline writes would only replace a newer baseline with the snapshot's older one.
+          return true
+        }
         // Why put the snapshot back: its buffer has nowhere to restore to yet, and dropping it here
         // would destroy the only copy of that unsaved text.
         set((s) => deferRecoveredEditorDraft(s, worktreeId, next))

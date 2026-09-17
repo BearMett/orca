@@ -296,6 +296,9 @@ describe('createEditorSlice recently closed editor tabs', () => {
     expect(store.getState().tabBarOrderByWorktree['wt-1']).toEqual(orderBefore)
     expect(store.getState().activeFileId).toBe(openId)
     expect(toastInfoMock).toHaveBeenCalledTimes(1)
+    expect(toastInfoMock).toHaveBeenCalledWith(
+      'notes.md is open with unsaved changes. Save or close it, then reopen to recover the parked draft.'
+    )
   })
 
   it('opens no second tab when the colliding snapshot names another group', () => {
@@ -397,6 +400,82 @@ describe('createEditorSlice recently closed editor tabs', () => {
     ])
     expect(store.getState().recentlyClosedTabKindsByWorktree['wt-1']?.at(-1)).toBe('editor')
     expect(toastInfoMock).toHaveBeenCalledTimes(1)
+    expect(toastInfoMock).toHaveBeenCalledWith(
+      'notes.md is open read-only. Close it, then reopen to recover the parked draft.'
+    )
+  })
+
+  it('parks a recovered draft beside a read-only log without opening a second tab', () => {
+    const store = createEditorTabsStore()
+    const logId = store.getState().openFile({
+      filePath: '/repo/notes.md',
+      relativePath: 'notes.md',
+      worktreeId: 'wt-1',
+      language: 'markdown',
+      mode: 'edit',
+      readOnly: true
+    })
+    const firstGroupId = store.getState().groupsByWorktree['wt-1']?.[0]?.id ?? ''
+    const secondGroupId = store
+      .getState()
+      .createEmptySplitGroup('wt-1', firstGroupId, 'right', { activate: false })
+    expect(secondGroupId).toBeTruthy()
+    parkRecoveredDraft(store, 'rescued draft')
+    const parked = (store.getState().recentlyClosedEditorTabsByWorktree['wt-1'] ?? [])[0]
+    store.setState({
+      recentlyClosedEditorTabsByWorktree: {
+        'wt-1': [{ ...parked, position: { groupId: secondGroupId ?? undefined } }]
+      },
+      activeTabType: 'terminal',
+      activeTabTypeByWorktree: { 'wt-1': 'terminal' }
+    })
+
+    expect(store.getState().reopenClosedEditorTab('wt-1')).toBe(true)
+
+    // The read-only record is reused by openFile whatever its identity key says, so the open must
+    // not happen at all: a second tab in the snapshot's group would render the same log twice.
+    expect(store.getState().unifiedTabsByWorktree['wt-1']).toHaveLength(1)
+    expect(store.getState().openFiles.map((f) => f.id)).toEqual([logId])
+    expect(store.getState().activeFileId).toBe(logId)
+    expect(store.getState().activeTabType).toBe('editor')
+    expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1']).toEqual([
+      expect.objectContaining({ dirtyDraftContent: 'rescued draft' })
+    ])
+    expect(toastInfoMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('consumes a recovered draft the reused alias record already holds', () => {
+    vi.stubGlobal('navigator', { userAgent: 'Windows' })
+    try {
+      const store = createEditorStore()
+      // Why the alias pair: only openFile's WSL-alias reuse lands a snapshot on a live record the
+      // identity-keyed pre-open collision check cannot see.
+      const liveId = store.getState().openFile({
+        filePath: '//wsl.localhost/Ubuntu/home/Alice/repo/notes.md',
+        relativePath: 'notes.md',
+        worktreeId: 'wt-1',
+        language: 'markdown',
+        mode: 'edit'
+      })
+      store.getState().setEditorDraft(liveId, 'same draft')
+      store.getState().markFileDirty(liveId, true)
+      store.getState().setLastKnownDiskSignature(liveId, 'sig-live')
+      parkRecoveredDraft(store, 'same draft', {
+        filePath: '\\\\wsl.localhost\\ubuntu\\home\\Alice\\repo\\notes.md',
+        lastKnownDiskSignature: 'sig-draft'
+      })
+
+      expect(store.getState().reopenClosedEditorTab('wt-1')).toBe(true)
+
+      expect(store.getState().openFiles).toHaveLength(1)
+      expect(store.getState().editorDrafts[liveId]).toBe('same draft')
+      expect(store.getState().openFiles[0]).toMatchObject({ lastKnownDiskSignature: 'sig-live' })
+      expect(store.getState().openFiles[0].pendingDiskBaselineVerification).toBeUndefined()
+      expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1']).toEqual([])
+      expect(toastInfoMock).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('applies the same recovered draft when the reused record is writable', () => {

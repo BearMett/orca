@@ -22,21 +22,30 @@ export function parkRecoveredEditorDrafts(
       recentlyClosedTabKindsByWorktree: state.recentlyClosedTabKindsByWorktree
     }
   }
+  const stack = [
+    ...snapshots,
+    ...(state.recentlyClosedEditorTabsByWorktree[worktreeId] ?? [])
+  ].slice(0, MAX_RECENT_CLOSED_EDITOR_TABS)
+  // Why counted rather than snapshots.length: the cap drops the overflow, and a kind entry with no
+  // snapshot behind it makes a later cross-type reopen pop an editor that is not there.
+  const parkedCount = Math.min(snapshots.length, stack.length)
   return {
     recentlyClosedEditorTabsByWorktree: {
       ...state.recentlyClosedEditorTabsByWorktree,
-      [worktreeId]: [
-        ...snapshots,
-        ...(state.recentlyClosedEditorTabsByWorktree[worktreeId] ?? [])
-      ].slice(0, MAX_RECENT_CLOSED_EDITOR_TABS)
+      [worktreeId]: stack
     },
     recentlyClosedTabKindsByWorktree: pushRecentlyClosedTabKind(
       state.recentlyClosedTabKindsByWorktree,
       worktreeId,
       'editor',
-      snapshots.length
+      parkedCount
     )
   }
+}
+
+/** Recovered drafts beyond `MAX_RECENT_CLOSED_EDITOR_TABS` are lost, so the heal can report them. */
+export function countRecoveredDraftsLostToCap(snapshotCount: number): number {
+  return Math.max(0, snapshotCount - MAX_RECENT_CLOSED_EDITOR_TABS)
 }
 
 /**
@@ -48,13 +57,19 @@ export function deferRecoveredEditorDraft(
   worktreeId: string,
   snapshot: ClosedEditorTabSnapshot
 ): ParkedRecoveredEditorDrafts {
+  const stack = state.recentlyClosedEditorTabsByWorktree[worktreeId] ?? []
+  // Why nothing moves: a tail defer is the first entry the cap drops, and pushing its kind anyway
+  // would leave a cross-type reopen popping an editor snapshot that is not in the stack.
+  if (stack.length >= MAX_RECENT_CLOSED_EDITOR_TABS) {
+    return {
+      recentlyClosedEditorTabsByWorktree: state.recentlyClosedEditorTabsByWorktree,
+      recentlyClosedTabKindsByWorktree: state.recentlyClosedTabKindsByWorktree
+    }
+  }
   return {
     recentlyClosedEditorTabsByWorktree: {
       ...state.recentlyClosedEditorTabsByWorktree,
-      [worktreeId]: [
-        ...(state.recentlyClosedEditorTabsByWorktree[worktreeId] ?? []),
-        snapshot
-      ].slice(0, MAX_RECENT_CLOSED_EDITOR_TABS)
+      [worktreeId]: [...stack, snapshot]
     },
     // Why the same end as the snapshot: LIFO pairing only holds while both enter the stacks together.
     recentlyClosedTabKindsByWorktree: appendRecentlyClosedTabKind(

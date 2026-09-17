@@ -58,6 +58,26 @@ describe('migrateHydratedEditorTabsAndGroups', () => {
     expect(healedGroup?.activeTabId).toBe('tab-local')
   })
 
+  it('keeps the merged tab pinned when the dropped twin was the pinned one', () => {
+    const state = {
+      unifiedTabsByWorktree: {
+        [WORKTREE_ID]: [
+          editorTab('tab-local', FILE_PATH),
+          { ...editorTab('tab-runtime', RUNTIME_FILE_ID), isPinned: true, color: 'red' }
+        ]
+      },
+      groupsByWorktree: {
+        [WORKTREE_ID]: [group('g1', ['tab-local', 'tab-runtime'], 'tab-runtime')]
+      }
+    }
+
+    const next = migrateHydratedEditorTabsAndGroups(state, MIGRATIONS)
+
+    expect(next.unifiedTabsByWorktree?.[WORKTREE_ID]).toEqual([
+      expect.objectContaining({ id: 'tab-local', isPinned: true, color: 'red' })
+    ])
+  })
+
   it('keeps one tab per group when the redirected tabs are in different groups', () => {
     const state = {
       unifiedTabsByWorktree: {

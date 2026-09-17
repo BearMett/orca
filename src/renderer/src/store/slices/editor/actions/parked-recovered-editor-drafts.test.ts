@@ -38,7 +38,7 @@ describe('parkRecoveredEditorDrafts', () => {
     }
   })
 
-  it('never pushes more kind entries than snapshots when the editor stack overflows', () => {
+  it('pushes one kind per snapshot that survives the editor-stack cap', () => {
     const snapshots = Array.from({ length: 24 }, (_value, index) => snapshot(index))
 
     const parked = parkRecoveredEditorDrafts(EMPTY, WORKTREE_ID, snapshots)
@@ -46,8 +46,22 @@ describe('parkRecoveredEditorDrafts', () => {
     const stack = parked.recentlyClosedEditorTabsByWorktree[WORKTREE_ID]
     const kinds = parked.recentlyClosedTabKindsByWorktree[WORKTREE_ID]
     expect(stack.length).toBeLessThan(snapshots.length)
-    expect(kinds).toHaveLength(snapshots.length)
+    expect(kinds).toHaveLength(stack.length)
     expect(kinds.every((kind) => kind === 'editor')).toBe(true)
+  })
+
+  it('keeps kinds paired with snapshots when the cap evicts what was already parked', () => {
+    const existing = parkRecoveredEditorDrafts(
+      EMPTY,
+      WORKTREE_ID,
+      Array.from({ length: 8 }, (_value, index) => snapshot(index))
+    )
+
+    const parked = parkRecoveredEditorDrafts(existing, WORKTREE_ID, [snapshot(20), snapshot(21)])
+
+    expect(parked.recentlyClosedTabKindsByWorktree[WORKTREE_ID]).toHaveLength(
+      parked.recentlyClosedEditorTabsByWorktree[WORKTREE_ID].length
+    )
   })
 
   it('stacks newest first on top of what the worktree already parked', () => {
@@ -111,5 +125,9 @@ describe('deferRecoveredEditorDraft', () => {
     const stack = deferred.recentlyClosedEditorTabsByWorktree[WORKTREE_ID]
     expect(stack).toHaveLength(10)
     expect(stack.some((entry) => entry.filePath === '/workspace/draft-99.ts')).toBe(false)
+    // A kind with no snapshot behind it would make a cross-type reopen pop a missing editor.
+    expect(deferred.recentlyClosedTabKindsByWorktree[WORKTREE_ID]).toEqual(
+      full.recentlyClosedTabKindsByWorktree[WORKTREE_ID]
+    )
   })
 })
