@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClosedEditorTabSnapshot } from '../types/open-file'
 import {
   deferRecoveredEditorDraft,
@@ -17,6 +17,12 @@ function snapshot(index: number): ClosedEditorTabSnapshot {
     mode: 'edit',
     dirtyDraftContent: `draft ${index}`
   }
+}
+
+/** A plain close with nothing unsaved — the entry the cap may evict without losing text. */
+function savedSnapshot(index: number): ClosedEditorTabSnapshot {
+  const { dirtyDraftContent: _draft, ...rest } = snapshot(index)
+  return { ...rest, filePath: `/workspace/saved-${index}.ts`, relativePath: `saved-${index}.ts` }
 }
 
 const EMPTY: ParkedRecoveredEditorDrafts = {
@@ -88,6 +94,16 @@ describe('parkRecoveredEditorDrafts', () => {
 })
 
 describe('deferRecoveredEditorDraft', () => {
+  let warn: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    warn.mockRestore()
+  })
+
   it('appends the snapshot and its kind to the back of both stacks', () => {
     const existing = parkRecoveredEditorDrafts(EMPTY, WORKTREE_ID, [snapshot(1), snapshot(2)])
 
@@ -113,7 +129,25 @@ describe('deferRecoveredEditorDraft', () => {
     )
   })
 
-  it('drops the deferred snapshot rather than evicting a newer close at the cap', () => {
+  it('evicts the oldest saved close at the cap so the recovered draft survives', () => {
+    const full = parkRecoveredEditorDrafts(EMPTY, WORKTREE_ID, [
+      ...Array.from({ length: 9 }, (_value, index) => snapshot(index)),
+      savedSnapshot(0)
+    ])
+
+    const deferred = deferRecoveredEditorDraft(full, WORKTREE_ID, snapshot(99))
+
+    const stack = deferred.recentlyClosedEditorTabsByWorktree[WORKTREE_ID]
+    expect(stack).toHaveLength(10)
+    expect(stack.at(-1)?.filePath).toBe('/workspace/draft-99.ts')
+    expect(stack.some((entry) => entry.filePath === '/workspace/saved-0.ts')).toBe(false)
+    // A kind with no snapshot behind it would make a cross-type reopen pop a missing editor.
+    expect(deferred.recentlyClosedTabKindsByWorktree[WORKTREE_ID]).toEqual(
+      full.recentlyClosedTabKindsByWorktree[WORKTREE_ID]
+    )
+  })
+
+  it('drops the deferred snapshot when every entry at the cap holds unsaved text', () => {
     const full = parkRecoveredEditorDrafts(
       EMPTY,
       WORKTREE_ID,
@@ -122,12 +156,10 @@ describe('deferRecoveredEditorDraft', () => {
 
     const deferred = deferRecoveredEditorDraft(full, WORKTREE_ID, snapshot(99))
 
-    const stack = deferred.recentlyClosedEditorTabsByWorktree[WORKTREE_ID]
-    expect(stack).toHaveLength(10)
-    expect(stack.some((entry) => entry.filePath === '/workspace/draft-99.ts')).toBe(false)
-    // A kind with no snapshot behind it would make a cross-type reopen pop a missing editor.
-    expect(deferred.recentlyClosedTabKindsByWorktree[WORKTREE_ID]).toEqual(
-      full.recentlyClosedTabKindsByWorktree[WORKTREE_ID]
+    expect(deferred.recentlyClosedEditorTabsByWorktree).toBe(
+      full.recentlyClosedEditorTabsByWorktree
     )
+    expect(deferred.recentlyClosedTabKindsByWorktree).toBe(full.recentlyClosedTabKindsByWorktree)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('/workspace/draft-99.ts'))
   })
 })

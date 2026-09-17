@@ -48,6 +48,19 @@ export function createRecentlyClosedEditorTabs(
         get().setActiveFile(liveFileId)
         set((s) => buildEditorActiveResult(s, file.worktreeId, liveFileId))
       }
+      // Why only when the record has none: a snapshot baseline older than the live record's would
+      // manufacture a conflict, but a dirty record with no baseline at all is unverifiable.
+      const adoptSnapshotDiskBaseline = (liveFileId: string): void => {
+        if (next.lastKnownDiskSignature === undefined) {
+          return
+        }
+        const liveFile = get().openFiles.find((f) => f.id === liveFileId)
+        if (!liveFile || liveFile.lastKnownDiskSignature !== undefined) {
+          return
+        }
+        get().setLastKnownDiskSignature(liveFileId, next.lastKnownDiskSignature)
+        get().setPendingDiskBaselineVerification(liveFileId, true)
+      }
       if (dirtyDraftContent !== undefined) {
         // Why decided before the open: openFile would give the live record a second unified tab in
         // the snapshot's group, and the writes below would then land on the wrong document.
@@ -75,6 +88,7 @@ export function createRecentlyClosedEditorTabs(
         if (live && liveDraft === dirtyDraftContent) {
           // Why nothing is written: the live record already holds this exact text, so the draft and
           // baseline writes would only replace a newer baseline with the snapshot's older one.
+          adoptSnapshotDiskBaseline(live.id)
           activateLiveRecord(live.id)
           return true
         }
@@ -119,6 +133,7 @@ export function createRecentlyClosedEditorTabs(
         if (draftsBeforeOpen[restoredFileId] === dirtyDraftContent) {
           // Why nothing is written: the reused record already holds this exact text, so the draft
           // and baseline writes would only replace a newer baseline with the snapshot's older one.
+          adoptSnapshotDiskBaseline(restoredFileId)
           return true
         }
         // Why put the snapshot back: its buffer has nowhere to restore to yet, and dropping it here

@@ -375,6 +375,55 @@ describe('createEditorSlice recently closed editor tabs', () => {
     expect(store.getState().activeFileId).toBe(openId)
   })
 
+  it('gives a baseline-less live record the equal draft snapshot baseline to verify', () => {
+    const store = createEditorTabsStore()
+    const openId = openLocalEditor(store)
+    store.getState().setEditorDraft(openId, 'same draft')
+    store.getState().markFileDirty(openId, true)
+    parkRecoveredDraft(store, 'same draft', { lastKnownDiskSignature: 'sig-draft' })
+
+    expect(store.getState().reopenClosedEditorTab('wt-1')).toBe(true)
+
+    // Without the baseline the restored draft has nothing the conflict scan can verify it against.
+    expect(store.getState().openFiles[0]).toMatchObject({
+      lastKnownDiskSignature: 'sig-draft',
+      pendingDiskBaselineVerification: true
+    })
+    expect(store.getState().editorDrafts[openId]).toBe('same draft')
+    expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1']).toEqual([])
+  })
+
+  it('gives a baseline-less reused alias record the equal draft snapshot baseline', () => {
+    vi.stubGlobal('navigator', { userAgent: 'Windows' })
+    try {
+      const store = createEditorStore()
+      const liveId = store.getState().openFile({
+        filePath: '//wsl.localhost/Ubuntu/home/Alice/repo/notes.md',
+        relativePath: 'notes.md',
+        worktreeId: 'wt-1',
+        language: 'markdown',
+        mode: 'edit'
+      })
+      store.getState().setEditorDraft(liveId, 'same draft')
+      store.getState().markFileDirty(liveId, true)
+      parkRecoveredDraft(store, 'same draft', {
+        filePath: '\\\\wsl.localhost\\ubuntu\\home\\Alice\\repo\\notes.md',
+        lastKnownDiskSignature: 'sig-draft'
+      })
+
+      expect(store.getState().reopenClosedEditorTab('wt-1')).toBe(true)
+
+      expect(store.getState().openFiles).toHaveLength(1)
+      expect(store.getState().openFiles[0]).toMatchObject({
+        lastKnownDiskSignature: 'sig-draft',
+        pendingDiskBaselineVerification: true
+      })
+      expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1']).toEqual([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('parks a recovered draft rather than feeding it to a read-only record', () => {
     const store = withCrossTypeReopen(createEditorTabsStore())
     const logId = store.getState().openFile({

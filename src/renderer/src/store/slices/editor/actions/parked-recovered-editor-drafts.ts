@@ -58,11 +58,29 @@ export function deferRecoveredEditorDraft(
   snapshot: ClosedEditorTabSnapshot
 ): ParkedRecoveredEditorDrafts {
   const stack = state.recentlyClosedEditorTabsByWorktree[worktreeId] ?? []
-  // Why nothing moves: a tail defer is the first entry the cap drops, and pushing its kind anyway
-  // would leave a cross-type reopen popping an editor snapshot that is not in the stack.
   if (stack.length >= MAX_RECENT_CLOSED_EDITOR_TABS) {
+    // Why the oldest draft-less entry: the snapshot is the only copy of its unsaved text, and
+    // evicting an entry that carries one too would just move the loss to another document.
+    const evictIndex = stack.findLastIndex((entry) => entry.dirtyDraftContent === undefined)
+    if (evictIndex === -1) {
+      console.warn(
+        `[editor-reopen] dropped the recovered draft for ${snapshot.filePath}: the reopen stack is at its cap and every entry holds unsaved text`
+      )
+      return {
+        recentlyClosedEditorTabsByWorktree: state.recentlyClosedEditorTabsByWorktree,
+        recentlyClosedTabKindsByWorktree: state.recentlyClosedTabKindsByWorktree
+      }
+    }
+    console.warn(
+      `[editor-reopen] evicted ${stack[evictIndex].filePath} from the reopen stack to keep the recovered draft for ${snapshot.filePath}`
+    )
     return {
-      recentlyClosedEditorTabsByWorktree: state.recentlyClosedEditorTabsByWorktree,
+      recentlyClosedEditorTabsByWorktree: {
+        ...state.recentlyClosedEditorTabsByWorktree,
+        [worktreeId]: [...stack.slice(0, evictIndex), ...stack.slice(evictIndex + 1), snapshot]
+      },
+      // Why no kind is pushed: the stack length is unchanged, so an extra entry would have no
+      // snapshot behind it and a cross-type reopen would pop an editor that is not there.
       recentlyClosedTabKindsByWorktree: state.recentlyClosedTabKindsByWorktree
     }
   }

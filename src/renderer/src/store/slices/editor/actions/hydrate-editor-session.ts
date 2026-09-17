@@ -268,12 +268,9 @@ export function createHydrateEditorSession(
         // Why by surviving id, not by orphan id: drafts and front-matter keys are keyed by id alone,
         // and an id orphaned in one worktree can still name a live document in another.
         const survivingFileIds = new Set(survivingFiles.map((file) => file.id))
-        const survivingIds = new Set(
-          [...usedOpenFileIds].filter((fileId) => survivingFileIds.has(fileId))
-        )
         const markdownFrontmatterVisible = resolveHydratedEditorFrontmatter(
           persistedMarkdownFrontmatterVisible,
-          survivingIds,
+          survivingFileIds,
           editorFileIdMigrationsByWorktree
         )
 
