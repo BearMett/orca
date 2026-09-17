@@ -113,24 +113,23 @@ export function createHydrateEditorSession(
             route,
             persistedActiveFileId: persistedActiveFileIdByWorktree[worktreeId]
           })
-          if (
-            healed.droppedCount > 0 ||
-            healed.ownerRewrittenCount > 0 ||
-            healed.divergentDraftGroupCount > 0
-          ) {
-            console.warn(
-              `[editor-hydration] one-time heal of persisted editor state for ${worktreeId}: dropped ${healed.droppedCount} duplicate record(s), re-owned ${healed.ownerRewrittenCount}, kept ${healed.divergentDraftGroupCount} divergent-draft group(s) apart, ${healed.recoverableDrafts.length} draft(s) moved to the reopen stack`
-            )
+          const parkRecoveredDraft = (draftFile: PersistedOpenFile): void => {
+            const parked = (recoveredDraftTabsByWorktree[worktreeId] ??= [])
+            parked.push(buildRecoveredDraftSnapshot(draftFile, worktreeId))
           }
-          if (healed.recoverableDrafts.length > 0) {
-            recoveredDraftTabsByWorktree[worktreeId] = healed.recoverableDrafts.map((draftFile) =>
-              buildRecoveredDraftSnapshot(draftFile, worktreeId)
-            )
+          for (const draftFile of healed.recoverableDrafts) {
+            parkRecoveredDraft(draftFile)
           }
           const healedFileIds = new Set<string>()
           for (const { file: pf, supersededIds, ownerNormalized } of healed.files) {
             // Split tabs share one OpenFile; repeated records for the same owner are corruption.
             if (legacyFileIndex.hasOwner(pf, worktreeId)) {
+              // Why: a read-only and a writable row for one path resolve to the same owned id, so
+              // this skip can land on the only copy of an unsaved draft. Read-only rows are exempt —
+              // a reopen snapshot restores writable, which a log tab must never become.
+              if (pf.dirtyDraftContent !== undefined && pf.readOnly !== true) {
+                parkRecoveredDraft(pf)
+              }
               continue
             }
             const legacyId = legacyFileIndex.resolve(pf, worktreeId)
@@ -196,6 +195,18 @@ export function createHydrateEditorSession(
           }
           if (route && healedFileIds.size > 0) {
             healedTabHostTargets[worktreeId] = { fileIds: healedFileIds, route }
+          }
+          // Why after the loop: drafts parked by the id-collision skip above are only known now.
+          const parkedDraftCount = recoveredDraftTabsByWorktree[worktreeId]?.length ?? 0
+          if (
+            healed.droppedCount > 0 ||
+            healed.ownerRewrittenCount > 0 ||
+            healed.divergentDraftGroupCount > 0 ||
+            parkedDraftCount > 0
+          ) {
+            console.warn(
+              `[editor-hydration] healed persisted editor state for ${worktreeId}: dropped ${healed.droppedCount} duplicate record(s), re-owned ${healed.ownerRewrittenCount}, kept ${healed.divergentDraftGroupCount} divergent-draft group(s) apart, ${parkedDraftCount} draft(s) moved to the reopen stack`
+            )
           }
         }
 

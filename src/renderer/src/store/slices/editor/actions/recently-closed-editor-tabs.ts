@@ -35,9 +35,13 @@ export function createRecentlyClosedEditorTabs(
         }
       }))
       const { position, reopenId, dirtyDraftContent, ...file } = next
+      /** The parked draft stayed parked; name the document and what unblocks it. */
+      const parkedDraftBlockedToast = (reason: string): void => {
+        toast.info(`${file.relativePath || file.filePath} ${reason}`)
+      }
       const collisionToast = (): void => {
-        toast.info(
-          `${file.relativePath || file.filePath} is open with unsaved changes. Save or close it, then reopen to recover the parked draft.`
+        parkedDraftBlockedToast(
+          'is open with unsaved changes. Save or close it, then reopen to recover the parked draft.'
         )
       }
       // Why both halves: setActiveFile promotes the record's unified tab inside its group, and the
@@ -74,6 +78,8 @@ export function createRecentlyClosedEditorTabs(
       }
       // Why captured before the open: openFile's reuse rule is coarser than the identity key above
       // (it also reuses across local/WSL path aliases), so a collision can still surface here.
+      // Why targetGroupId is still passed: only that alias case can reuse a live record here, and
+      // the snapshot's own group is where the user closed it from.
       const beforeOpen = get()
       const reusableRecordIds = new Set(beforeOpen.openFiles.map((f) => f.id))
       const draftsBeforeOpen = beforeOpen.editorDrafts
@@ -84,6 +90,18 @@ export function createRecentlyClosedEditorTabs(
         targetGroupId: position?.groupId,
         reopenId
       })
+      if (
+        dirtyDraftContent !== undefined &&
+        get().openFiles.find((f) => f.id === restoredFileId)?.readOnly === true
+      ) {
+        // Why: openFile's reuse rule ignores readOnly, and setEditorDraft/markFileDirty hard no-op
+        // on a read-only record — writing the draft below would consume the snapshot and lose it.
+        set((s) => deferRecoveredEditorDraft(s, worktreeId, next))
+        parkedDraftBlockedToast(
+          'is open read-only. Close it, then reopen to recover the parked draft.'
+        )
+        return true
+      }
       const reusedLiveRecord = reusableRecordIds.has(restoredFileId)
       const reusedRecordHasUnsavedWork =
         reusedLiveRecord &&
@@ -101,7 +119,8 @@ export function createRecentlyClosedEditorTabs(
         collisionToast()
         return true
       }
-      // Why: the close could not keep this buffer open (a same-owner duplicate held a rival draft), so reopen is its recovery path.
+      // Why: a live `OpenFile` has no dirtyDraftContent — only the hydration heal parks one on a
+      // snapshot, for a record the restore could not give an id of its own. Reopen restores it.
       if (dirtyDraftContent !== undefined) {
         get().setEditorDraft(restoredFileId, dirtyDraftContent)
         get().markFileDirty(restoredFileId, true)

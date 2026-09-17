@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as AgentStatusModule from '@/lib/agent-status'
 import type { ExecutionHostId } from '../../../../shared/execution-host'
-import type { WorkspaceSessionState } from '../../../../shared/workspace-session-state-types'
+import type { Tab } from '../../../../shared/tab-types'
+import type {
+  PersistedOpenFile,
+  WorkspaceSessionState
+} from '../../../../shared/workspace-session-state-types'
 import { folderWorkspaceKey } from '../../../../shared/workspace-scope'
 import { buildEditorSessionData } from '@/lib/workspace-session'
 import {
   resolveWorktreeOperationRouteResult,
   type WorktreeOperationRouteState
 } from '@/lib/worktree-operation-route'
-import { resolveHealableWorktreeOwnerRoute } from './editor/file-ids/hydrated-editor-owner-healing'
+import {
+  alignHealedEditorTabHosts,
+  resolveHealableWorktreeOwnerRoute
+} from './editor/file-ids/hydrated-editor-owner-healing'
 import type { OpenFile } from './editor'
 import { createStoreSessionMockApi } from './store-session-test-harness'
 import { createTestStore, makeWorktree } from './store-test-helpers'
@@ -341,6 +348,124 @@ function folderSession(runtimeEnvironmentIds: readonly (string | null)[]): Works
     activeTabTypeByWorktree: {}
   }
 }
+
+const BRAND_RELATIVE_PATH = 'sandbox/2026-09-16-listings-survey/handout/brand-requests.txt'
+
+function brandRow(overrides: Partial<PersistedOpenFile>): PersistedOpenFile {
+  return {
+    filePath: STALE_TAB_BRAND_PATH,
+    relativePath: BRAND_RELATIVE_PATH,
+    worktreeId: STALE_TAB_WORKTREE_ID,
+    language: 'plaintext',
+    runtimeEnvironmentId: null,
+    ...overrides
+  }
+}
+
+function hydrateBrandRows(rows: readonly PersistedOpenFile[]) {
+  const session = buildStaleEditorTabSession()
+  session.openFilesByWorktree![STALE_TAB_WORKTREE_ID] = [...rows]
+  return hydrate(prepareStore(['local']), session)
+}
+
+describe('recovered draft parking at hydration', () => {
+  it('never parks a read-only row draft that would come back writable', () => {
+    const state = hydrateBrandRows([
+      brandRow({ readOnly: true, liveTail: true, dirtyDraftContent: 'log draft A' }),
+      brandRow({ readOnly: true, liveTail: true, dirtyDraftContent: 'log draft B' })
+    ])
+
+    expect(state.openFiles.map((file) => [file.id, file.readOnly === true, file.isDirty])).toEqual([
+      [STALE_TAB_BRAND_PATH, true, false]
+    ])
+    expect(state.editorDrafts).toEqual({})
+    expect(state.recentlyClosedEditorTabsByWorktree[STALE_TAB_WORKTREE_ID] ?? []).toEqual([])
+  })
+
+  it('parks the rival draft when both duplicates are writable', () => {
+    const state = hydrateBrandRows([
+      brandRow({ dirtyDraftContent: 'draft A' }),
+      brandRow({ dirtyDraftContent: 'draft B' })
+    ])
+
+    expect(state.editorDrafts[STALE_TAB_BRAND_PATH]).toBe('draft A')
+    expect(
+      (state.recentlyClosedEditorTabsByWorktree[STALE_TAB_WORKTREE_ID] ?? []).map(
+        (snapshot) => snapshot.dirtyDraftContent
+      )
+    ).toEqual(['draft B'])
+  })
+
+  it('parks the draft of a writable row a read-only row for its path displaced', () => {
+    const state = hydrateBrandRows([
+      brandRow({ readOnly: true, liveTail: true }),
+      brandRow({ dirtyDraftContent: 'unsaved edit' })
+    ])
+
+    // Both rows resolve to the same owned id, so only the first restores as a record.
+    expect(state.openFiles.map((file) => [file.id, file.readOnly === true, file.isDirty])).toEqual([
+      [STALE_TAB_BRAND_PATH, true, false]
+    ])
+    expect(state.editorDrafts).toEqual({})
+    expect(
+      (state.recentlyClosedEditorTabsByWorktree[STALE_TAB_WORKTREE_ID] ?? []).map(
+        (snapshot) => snapshot.dirtyDraftContent
+      )
+    ).toEqual(['unsaved edit'])
+    expect(state.recentlyClosedTabKindsByWorktree[STALE_TAB_WORKTREE_ID]).toEqual(['editor'])
+  })
+
+  it('leaves the draft on the record when the writable row restores first', () => {
+    const state = hydrateBrandRows([
+      brandRow({ dirtyDraftContent: 'unsaved edit' }),
+      brandRow({ readOnly: true, liveTail: true })
+    ])
+
+    expect(state.openFiles.map((file) => [file.id, file.readOnly === true, file.isDirty])).toEqual([
+      [STALE_TAB_BRAND_PATH, false, true]
+    ])
+    expect(state.editorDrafts[STALE_TAB_BRAND_PATH]).toBe('unsaved edit')
+    expect(state.recentlyClosedEditorTabsByWorktree[STALE_TAB_WORKTREE_ID] ?? []).toEqual([])
+  })
+})
+
+describe('healed editor tab host alignment', () => {
+  const HUB_ENVIRONMENT_ID = 'hub-env-1'
+  const SSH_HOST_ID: ExecutionHostId = 'ssh:conn-1'
+  const SSH_HUB_ROUTE = { executionHostId: SSH_HOST_ID, runtimeEnvironmentId: HUB_ENVIRONMENT_ID }
+
+  function stampedTab(executionHostId: ExecutionHostId): Tab {
+    return {
+      id: 'tab-1',
+      entityId: 'file-1',
+      groupId: 'group-1',
+      worktreeId: 'wt-1',
+      executionHostId,
+      contentType: 'editor',
+      label: 'a.txt',
+      customLabel: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: 0
+    }
+  }
+
+  function align(tab: Tab) {
+    return alignHealedEditorTabHosts(
+      { 'wt-1': [tab] },
+      { 'wt-1': { fileIds: new Set(['file-1']), route: SSH_HUB_ROUTE } }
+    )
+  }
+
+  it('leaves a tab stamped with the hub that transports an ssh route untouched', () => {
+    expect(align(stampedTab(`runtime:${HUB_ENVIRONMENT_ID}`))).toBeNull()
+    expect(align(stampedTab(SSH_HOST_ID))).toBeNull()
+  })
+
+  it('still re-stamps a tab naming a host the route contradicts', () => {
+    expect(align(stampedTab('runtime:other-env'))?.['wt-1'][0].executionHostId).toBe(SSH_HOST_ID)
+  })
+})
 
 describe('folder workspace owner healing', () => {
   it('heals onto a stamped local folder owner', () => {

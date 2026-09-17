@@ -7,6 +7,7 @@ import {
   type ExecutionHostId
 } from '../../../../../../shared/execution-host'
 import { findFolderWorkspaceOwner } from '@/lib/folder-workspace-runtime-owner'
+import { isExecutionHostAliasForWorktree } from '@/lib/worktree-execution-host-alias'
 import { findIndexedProjectGroupOwner } from '@/lib/worktree-runtime-owner-index'
 import {
   resolveExplicitWorktreeOperationRouteResult,
@@ -209,7 +210,10 @@ export function planHealedPersistedEditorFiles(args: {
         for (const entry of superseded) {
           if (
             entry.dirtyDraftContent !== undefined &&
-            entry.dirtyDraftContent !== file.dirtyDraftContent
+            entry.dirtyDraftContent !== file.dirtyDraftContent &&
+            // Why: a read-only row must restore clean, and the reopen snapshot drops readOnly/liveTail
+            // and reopens as 'edit' — parking its draft would hand back a writable dirty log tab.
+            entry.readOnly !== true
           ) {
             recoverableDrafts.push(entry)
           }
@@ -271,6 +275,25 @@ export function planHealedPersistedEditorFiles(args: {
   }
 }
 
+/**
+ * A stamp the route already names. An SSH worktree reached through a paired HUB routes as
+ * `{ ssh:conn, runtime:hub }`, and `runtime:hub` is a correct stamp for it — equality alone would
+ * rewrite those tabs on every hydration. A route with no host names no alias, so its tabs are
+ * unstamped as before.
+ */
+function isEditorTabHostOnRoute(
+  executionHostId: ExecutionHostId,
+  route: WorktreeOperationRoute
+): boolean {
+  return (
+    route.executionHostId !== null &&
+    isExecutionHostAliasForWorktree(executionHostId, {
+      hostId: route.executionHostId,
+      runtimeOwnerEnvironmentId: route.runtimeEnvironmentId ?? undefined
+    })
+  )
+}
+
 function withEditorTabExecutionHost(tab: Tab, executionHostId: ExecutionHostId | null): Tab {
   const { executionHostId: previousHostId, ...withoutHost } = tab
   void previousHostId
@@ -304,7 +327,7 @@ export function alignHealedEditorTabHosts(
         !fileIds.has(tab.entityId) ||
         // Why: only a stamp that contradicts the route is corrected — stamping an unstamped tab is a different change.
         !tab.executionHostId ||
-        tab.executionHostId === route.executionHostId
+        isEditorTabHostOnRoute(tab.executionHostId, route)
       ) {
         return tab
       }

@@ -23,9 +23,13 @@
  *   --presses <n>      tab.previousRecent presses after closing (default 5).
  *   --keep             Keep the temporary run directory (it is kept on failure regardless).
  *
- * The source orca-data.json is only ever READ. Every write goes to a fresh mkdtemp run directory,
- * so the developer's profile cannot be touched. Persisted terminal tabs lose `launchAgent` in the
- * copy so a tab whose PTY is gone cannot relaunch an agent CLI.
+ * The source orca-data.json is only ever READ, and the copy the app launches from is sanitized
+ * first. Every write goes to a fresh mkdtemp run directory, so the developer's profile cannot be
+ * touched. Three things leave the copy: persisted terminal tabs lose `launchAgent`, so a tab whose
+ * PTY is gone cannot relaunch an agent CLI; persisted editor rows lose `dirtyDraftContent` and
+ * `lastKnownDiskSignature`; and `editorAutoSave` is forced off. The last two matter because the
+ * copied rows keep ABSOLUTE file paths — a restored dirty draft would otherwise be autosaved
+ * straight into the developer's real file. This tool investigates tab identity, not drafts.
  *
  * Exit codes: 0 healed and nothing came back, 1 a tracked path survived, 2 nothing to repro.
  */
@@ -383,6 +387,30 @@ function stripLaunchAgents(data) {
   return stripped
 }
 
+/** The copy keeps absolute paths, so a restored draft is a draft over the developer's real file. */
+function stripPersistedEditorDrafts(data) {
+  let stripped = 0
+  const sessions = [data.workspaceSession, ...Object.values(data.workspaceSessionsByHostId ?? {})]
+  for (const session of sessions) {
+    for (const files of Object.values(session?.openFilesByWorktree ?? {})) {
+      for (const file of files) {
+        if (file.dirtyDraftContent !== undefined) {
+          delete file.dirtyDraftContent
+          stripped++
+        }
+        delete file.lastKnownDiskSignature
+      }
+    }
+  }
+  return stripped
+}
+
+/** Second lock on the same door: nothing typed during the run reaches disk either. */
+function disableEditorAutoSave(data) {
+  data.settings = { ...data.settings, editorAutoSave: false }
+  return true
+}
+
 /**
  * Quit without hanging. App quit deliberately leaves the terminal daemon alive for warm reattach,
  * and that detached process keeps Playwright's `close()` waiting on inherited pipes forever, so the
@@ -518,6 +546,10 @@ const report = {
   runRoot,
   evidenceDir,
   strippedLaunchAgents: stripLaunchAgents(source),
+  sanitized: {
+    draftsStripped: stripPersistedEditorDrafts(source),
+    autosaveDisabled: disableEditorAutoSave(source)
+  },
   scan: Object.fromEntries(affectedByWorktree),
   baseline: persistedShape(source, worktreeId, trackedPaths)
 }

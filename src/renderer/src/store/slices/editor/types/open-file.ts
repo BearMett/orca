@@ -162,7 +162,8 @@ export type ClosedEditorTabSnapshot = Omit<
 > & {
   reopenId?: string
   position?: RecentlyClosedTabPosition
-  /** Unsaved buffer to restore with the tab, for a close that could not keep the draft open. */
+  /** Unsaved buffer to restore with the tab, parked by the hydration heal for a persisted record
+   *  that had no id of its own to restore under. A close never sets it. */
   dirtyDraftContent?: string
 }
 

@@ -372,6 +372,45 @@ describe('createEditorSlice recently closed editor tabs', () => {
     expect(store.getState().activeFileId).toBe(openId)
   })
 
+  it('parks a recovered draft rather than feeding it to a read-only record', () => {
+    const store = withCrossTypeReopen(createEditorTabsStore())
+    const logId = store.getState().openFile({
+      filePath: '/repo/notes.md',
+      relativePath: 'notes.md',
+      worktreeId: 'wt-1',
+      language: 'markdown',
+      mode: 'edit',
+      readOnly: true
+    })
+    parkRecoveredDraft(store, 'rescued draft')
+
+    expect(store.getState().reopenClosedTab('wt-1')).toBe(true)
+
+    // openFile reuses the read-only record, and its draft/dirty writes hard no-op — the snapshot
+    // is the only copy of that text, so it goes back on the stack instead of being consumed.
+    expect(store.getState().openFiles.map((f) => [f.id, f.readOnly === true, f.isDirty])).toEqual([
+      [logId, true, false]
+    ])
+    expect(store.getState().editorDrafts).toEqual({})
+    expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1']).toEqual([
+      expect.objectContaining({ dirtyDraftContent: 'rescued draft' })
+    ])
+    expect(store.getState().recentlyClosedTabKindsByWorktree['wt-1']?.at(-1)).toBe('editor')
+    expect(toastInfoMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies the same recovered draft when the reused record is writable', () => {
+    const store = withCrossTypeReopen(createEditorTabsStore())
+    const liveId = openLocalEditor(store)
+    parkRecoveredDraft(store, 'rescued draft')
+
+    expect(store.getState().reopenClosedTab('wt-1')).toBe(true)
+
+    expect(store.getState().editorDrafts[liveId]).toBe('rescued draft')
+    expect(store.getState().recentlyClosedEditorTabsByWorktree['wt-1'] ?? []).toEqual([])
+    expect(toastInfoMock).not.toHaveBeenCalled()
+  })
+
   it('reopens close-all mirrored editor tabs as local tabs', () => {
     const store = createEditorStore()
     openMirroredEditor(store, '/repo/notes.md')
