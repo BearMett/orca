@@ -698,6 +698,68 @@ describe('listCodexSessionFiles', () => {
     expect(second.dailyAggregates).toEqual(cold.dailyAggregates)
   })
 
+  // The reuse gate has its own legacy check, separate from the resume gate. A
+  // cached entry can predate the bridge marker while the source file itself is
+  // untouched, so (size, mtime) still match and nothing else would stop the
+  // scan serving a full-history projection for a file that is now parsed
+  // suffix-only — double-counting the copied prefix against the managed copy.
+  it('does not reuse a pre-bridge cache once the source became suffix-only', async () => {
+    const runtimeSessionsDir = join(userDataDir, 'codex-runtime-home', 'home', 'sessions')
+    const markerDir = join(userDataDir, 'codex-runtime-home', 'home', '.orca-session-copies')
+    const systemSessionsDir = join(fakeHomeDir, '.codex', 'sessions')
+    mkdirSync(runtimeSessionsDir, { recursive: true })
+    mkdirSync(systemSessionsDir, { recursive: true })
+    const systemSessionPath = join(systemSessionsDir, 'system.jsonl')
+    const runtimeSessionPath = join(runtimeSessionsDir, 'system.jsonl')
+    const meta = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'legacy-session', cwd: join(fakeHomeDir, 'repo') }
+    })}\n`
+    const copiedPrefix = `${meta}${usageRecord('2026-05-26T12:00:00.000Z', 10)}`
+    // A total-only tail is what separates the two readings: parsed as a suffix
+    // it is a baseline worth nothing, carried in a full projection it is a
+    // delta worth 3.
+    writeFileSync(
+      systemSessionPath,
+      `${copiedPrefix}${totalOnlyUsageRecord('2026-05-26T12:01:00.000Z', 13)}`,
+      'utf-8'
+    )
+
+    // No marker directory yet, so this is an ordinary full parse.
+    const first = await scanCodexUsageFiles([], [])
+    const cachedStat = lstatSync(systemSessionPath)
+
+    // The bridge marker lands afterwards, recording the source as it stood when
+    // the copy was taken. The source file is not touched.
+    mkdirSync(markerDir, { recursive: true })
+    writeFileSync(
+      runtimeSessionPath,
+      `${copiedPrefix}${usageRecord('2026-05-26T12:02:00.000Z', 5, 15)}`,
+      'utf-8'
+    )
+    writeFileSync(
+      join(markerDir, 'system.jsonl.json'),
+      `${JSON.stringify({
+        sourcePath: systemSessionPath,
+        sourceSize: Buffer.byteLength(copiedPrefix),
+        sourceMtimeMs: cachedStat.mtimeMs - 5000,
+        targetSize: Buffer.byteLength(copiedPrefix),
+        targetMtimeMs: cachedStat.mtimeMs - 5000
+      })}\n`,
+      'utf-8'
+    )
+    // The reuse gate's own check is the only thing left: the stat still matches.
+    expect(lstatSync(systemSessionPath).size).toBe(cachedStat.size)
+    expect(lstatSync(systemSessionPath).mtimeMs).toBe(cachedStat.mtimeMs)
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    const cold = await scanCodexUsageFiles([], [])
+    expect(
+      second.dailyAggregates.reduce((total, aggregate) => total + aggregate.totalTokens, 0)
+    ).toBe(15)
+    expect(second.dailyAggregates).toEqual(cold.dailyAggregates)
+  })
+
   it('treats a leading total-only source suffix record as baseline', async () => {
     const runtimeSessionsDir = join(userDataDir, 'codex-runtime-home', 'home', 'sessions')
     const runtimeBridgeMarkerDir = join(
