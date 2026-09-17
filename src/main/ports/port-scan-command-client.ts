@@ -78,7 +78,9 @@ export class PortScanCommandClient {
       // spawn is still stalling the thread, producing a false timeout.
       queueCap: {
         maxQueuedCalls: MAX_QUEUED_CALLS,
-        describeFull: () => 'Port scan command queue is full.'
+        // Names the dropped command: pile-up is per-probe, so the log is
+        // useless without knowing which of lsof/ps/netstat was shed.
+        describeFull: (request) => `Port scan command queue is full; dropped ${request.command}.`
       },
       createUnavailableError: (message) => new PortScanWorkerUnavailableError(message),
       // Plain wording on purpose: a wedged worker is not a command timeout and

@@ -9,13 +9,17 @@ import { LazyWorkerThreadHost, type WorkerThreadFactory } from './lazy-worker-th
  * the thread's lifetime; this owns which call a message belongs to.
  */
 
-export type WorkerThreadRequestQueueOptions = {
+export type WorkerThreadRequestQueueOptions<TRequest> = {
   factory: WorkerThreadFactory
   idleTeardownMs: number
   /** Consecutive deaths after which the remaining queue is failed rather than respawned. */
   maxConsecutiveDeaths: number
-  /** Omit for an unbounded queue; set it where pile-up is itself the bug. */
-  queueCap?: { maxQueuedCalls: number; describeFull: () => string }
+  /**
+   * Omit for an unbounded queue; set it where pile-up is itself the bug.
+   * `describeFull` gets the rejected request so the message can name the work
+   * that was dropped, which is the only detail a log has to identify it.
+   */
+  queueCap?: { maxQueuedCalls: number; describeFull: (request: TRequest) => string }
   /** The client's own error subclass, so callers can tell "no worker" from a fault. */
   createUnavailableError: (message: string) => Error
   describeTimeout: (timeoutMs: number) => string
@@ -43,7 +47,7 @@ export class WorkerThreadRequestQueue<
   private nextId = 1
   private readonly host: LazyWorkerThreadHost<TResponse>
 
-  constructor(private readonly options: WorkerThreadRequestQueueOptions) {
+  constructor(private readonly options: WorkerThreadRequestQueueOptions<TRequest>) {
     this.host = new LazyWorkerThreadHost<TResponse>({
       factory: options.factory,
       idleTeardownMs: options.idleTeardownMs,
@@ -63,9 +67,12 @@ export class WorkerThreadRequestQueue<
    */
   dispatch(buildRequest: (id: number) => TRequest, timeoutMs: number): Promise<TResponse> {
     return new Promise((resolve, reject) => {
+      // Built before the cap check so a rejection can name the dropped work;
+      // the id it burns is only a correlation token, so a gap costs nothing.
+      const request = buildRequest(this.nextId++)
       const cap = this.options.queueCap
       if (cap && this.queue.length >= cap.maxQueuedCalls) {
-        reject(new Error(cap.describeFull()))
+        reject(new Error(cap.describeFull(request)))
         return
       }
       // A fresh burst from full idle starts new work: clear any death count
@@ -74,7 +81,7 @@ export class WorkerThreadRequestQueue<
         this.consecutiveDeaths = 0
       }
       this.queue.push({
-        request: buildRequest(this.nextId++),
+        request,
         timeoutMs,
         resolve,
         reject,

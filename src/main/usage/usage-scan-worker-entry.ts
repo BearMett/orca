@@ -14,6 +14,15 @@ import type {
 // dispatches one request at a time, so this loop stays serial; imports must
 // remain electron-free (see the worker-protocol note) — the build's
 // plain-node-entry-guard enforces it for this entry.
+//
+// Child processes: `worker.terminate()` kills the thread but reaps nothing it
+// spawned, so anything forked from here outlives the scan that started it.
+// OpenCode discovery reaches that today — its `wslGated*` calls fork the WSL
+// transcript sidecar whenever the path is a `\\wsl$\...` UNC one, which a
+// Windows user's `OPENCODE_DB` or `XDG_DATA_HOME` can be. Measured: one scan
+// through this entry with a UNC `OPENCODE_DB` forked a sidecar that survived
+// `terminate()`. Codex needs no gate (pure `areWorktreePathsEqual`). Before
+// adding any other spawning import, give it an owner that reaps on teardown.
 
 if (!parentPort) {
   throw new Error('Usage scan worker must run with a parent port.')
