@@ -15,14 +15,17 @@ import type {
 // remain electron-free (see the worker-protocol note) — the build's
 // plain-node-entry-guard enforces it for this entry.
 //
-// Child processes: `worker.terminate()` kills the thread but reaps nothing it
-// spawned, so anything forked from here outlives the scan that started it.
-// OpenCode discovery reaches that today — its `wslGated*` calls fork the WSL
-// transcript sidecar whenever the path is a `\\wsl$\...` UNC one, which a
-// Windows user's `OPENCODE_DB` or `XDG_DATA_HOME` can be. Measured: one scan
-// through this entry with a UNC `OPENCODE_DB` forked a sidecar that survived
-// `terminate()`. Codex needs no gate (pure `areWorktreePathsEqual`). Before
-// adding any other spawning import, give it an owner that reaps on teardown.
+// Child processes: this bundle can fork one. OpenCode discovery's `wslGated*`
+// calls fork the WSL transcript sidecar whenever the path is a `\\wsl$\...`
+// UNC one, which a `OPENCODE_DB` or `XDG_DATA_HOME` override can be. Measured
+// through this entry: the sidecar is reaped by `worker.terminate()`, because
+// tearing the thread down closes the IPC channel it owned and the sidecar
+// entry exits on `disconnect`. That is the only reason it is not an orphan —
+// `terminate()` itself reaps nothing. A future spawn from here that does not
+// exit when its channel closes would outlive the app's use of it, so give any
+// such child an owner that kills it explicitly. Codex needs no gate (pure
+// `areWorktreePathsEqual`). Note the sidecar is re-forked per worker
+// lifecycle rather than pooled for the app's life, as it was pre-worker.
 
 if (!parentPort) {
   throw new Error('Usage scan worker must run with a parent port.')
