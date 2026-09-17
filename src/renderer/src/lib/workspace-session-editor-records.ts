@@ -1,34 +1,6 @@
 import type { PersistedOpenFile } from '../../../shared/workspace-session-state-types'
 import type { OpenFile } from '../store/slices/editor'
-import { runtimeOwnerKey } from '../store/slices/editor/file-ids/editor-file-ids'
-
-/**
- * Identity of a persisted editor record. Persisted records carry no id, so two live OpenFiles
- * sharing this key serialize to indistinguishable rows that restore as one document — the write
- * has to merge them instead of stacking another duplicate on every save.
- */
-export function persistedOpenFileOwnerKey(
-  file: Pick<
-    OpenFile,
-    | 'worktreeId'
-    | 'runtimeEnvironmentId'
-    | 'externalSshTargetId'
-    | 'filePath'
-    | 'readOnly'
-    | 'liveTail'
-  >
-): string {
-  return JSON.stringify([
-    file.worktreeId,
-    runtimeOwnerKey(file.runtimeEnvironmentId),
-    file.externalSshTargetId?.trim() || null,
-    file.filePath,
-    // Why: a read-only log tab and a writable tab on one path are different documents — merging
-    // them would restore the log writable, carrying a hot-exit draft it must never have.
-    file.readOnly === true,
-    file.liveTail === true
-  ])
-}
+import { editorDocumentIdentityKey } from '../store/slices/editor/file-ids/editor-document-identity'
 
 export type PersistedEditorFileRecords = {
   openFilesByWorktree: Record<string, PersistedOpenFile[]>
@@ -63,6 +35,9 @@ function toPersistedOpenFile(
       : {})
   }
 }
+
+/** A record already written to the worktree's row list, and the live OpenFile that owns it. */
+type KeptRecord = { record: PersistedOpenFile; fileId: string; position: number }
 
 /** Two unsaved buffers that disagree: merging would silently destroy one of them. */
 function hasDivergentDraft(left: PersistedOpenFile, right: PersistedOpenFile): boolean {
@@ -112,10 +87,10 @@ export function buildPersistedEditorFileRecords(
   const openFilesByWorktree: Record<string, PersistedOpenFile[]> = {}
   const editFileIdsByWorktree: Record<string, Set<string>> = {}
   const survivingFileIdByMergedId = new Map<string, string>()
-  const keptByOwnerKey = new Map<
-    string,
-    { record: PersistedOpenFile; fileId: string; position: number }
-  >()
+  // Why a list per identity: divergent drafts stay apart as separate rows, and a later duplicate
+  // must merge into whichever of them it agrees with — tracking only the first stacks a new row
+  // for every repeat of the second draft.
+  const keptVariantsByIdentity = new Map<string, KeptRecord[]>()
 
   for (const file of openFiles) {
     if (file.mode !== 'edit') {
@@ -126,14 +101,16 @@ export function buildPersistedEditorFileRecords(
     const fileIds =
       editFileIdsByWorktree[file.worktreeId] ?? (editFileIdsByWorktree[file.worktreeId] = new Set())
     const record = toPersistedOpenFile(file, editorDrafts)
-    const ownerKey = persistedOpenFileOwnerKey(file)
-    const kept = keptByOwnerKey.get(ownerKey)
-    if (!kept || hasDivergentDraft(kept.record, record)) {
+    const identity = editorDocumentIdentityKey(file)
+    const variants = keptVariantsByIdentity.get(identity) ?? []
+    if (variants.length === 0) {
+      keptVariantsByIdentity.set(identity, variants)
+    }
+    const kept = variants.find((variant) => !hasDivergentDraft(variant.record, record))
+    if (!kept) {
       records.push(record)
       fileIds.add(file.id)
-      if (!kept) {
-        keptByOwnerKey.set(ownerKey, { record, fileId: file.id, position: records.length - 1 })
-      }
+      variants.push({ record, fileId: file.id, position: records.length - 1 })
       continue
     }
     if (
@@ -150,7 +127,8 @@ export function buildPersistedEditorFileRecords(
     fileIds.delete(kept.fileId)
     fileIds.add(file.id)
     survivingFileIdByMergedId.set(kept.fileId, file.id)
-    keptByOwnerKey.set(ownerKey, { record, fileId: file.id, position: kept.position })
+    kept.record = record
+    kept.fileId = file.id
   }
 
   for (const mergedId of survivingFileIdByMergedId.keys()) {

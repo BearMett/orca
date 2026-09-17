@@ -149,7 +149,8 @@ export function createHydrateEditorSession(
         const orphanFileIds = collectHydratedOrphanEditorFileIds(
           openFiles,
           nextTabsByWorktree,
-          filteredActiveFileIdByWorktree
+          filteredActiveFileIdByWorktree,
+          editorDrafts
         )
         const survivingIds = new Set(
           [...usedOpenFileIds].filter((fileId) => !orphanFileIds.has(fileId))

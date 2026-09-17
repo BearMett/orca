@@ -51,9 +51,16 @@ function projectWorktreeTabModelReconciliations(
   // Why only here: `openFiles` is written once the whole fold is projected, so the batch's
   // one-shot editor index stays valid — and an unsaved buffer is never swept.
   if (orphanEditorFileIds.size > 0) {
+    // Why the draft check: isDirty is set by a debounced callback, so a just-typed buffer can hold
+    // a draft before the flag flushes — sweeping it would discard the user's text.
     const sweptFileIds = new Set(
       state.openFiles
-        .filter((file) => file.isDirty !== true && orphanEditorFileIds.has(file.id))
+        .filter(
+          (file) =>
+            file.isDirty !== true &&
+            state.editorDrafts[file.id] === undefined &&
+            orphanEditorFileIds.has(file.id)
+        )
         .map((file) => file.id)
     )
     if (sweptFileIds.size > 0) {
@@ -106,6 +113,9 @@ export function createTabsSessionActions(
       }
     },
 
+    // Why no orphan prune here: this runs from setActiveWorktree and empty-group checks, which can
+    // observe an in-flight open (the OpenFile is published before its tab), so pruning would delete
+    // a live document — only the batch fold at the hydration boundary sees a settled tab model.
     reconcileWorktreeTabModel: (worktreeId) => {
       const reconciliation = projectWorktreeTabModelReconciliation(get(), worktreeId)
       if (Object.keys(reconciliation.patch).length > 0) {

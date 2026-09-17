@@ -25,12 +25,15 @@ export function collectOrphanEditorFileIds(
 export function collectHydratedOrphanEditorFileIds(
   openFiles: readonly Pick<OpenFile, 'id' | 'isDirty' | 'worktreeId'>[],
   tabsByWorktree: Record<string, Tab[]>,
-  activeFileIdByWorktree: Record<string, string | null>
+  activeFileIdByWorktree: Record<string, string | null>,
+  editorDrafts: Record<string, string>
 ): Set<string> {
   const fileIdsByWorktree = new Map<string, Set<string>>()
   for (const file of openFiles) {
     // Why: an unsaved buffer must survive the sweep; only a clean document is disposable chrome.
-    if (file.isDirty === true) {
+    // Why the draft check: isDirty is set by a debounced callback, so a restored or just-typed
+    // draft can exist before the flag flushes.
+    if (file.isDirty === true || editorDrafts[file.id] !== undefined) {
       continue
     }
     const fileIds = fileIdsByWorktree.get(file.worktreeId)

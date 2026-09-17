@@ -2,12 +2,9 @@ import type { AppState } from '../../../types'
 import type { EditorSlice } from '../types/editor-slice'
 import type { DiffSource, EditorOpenTargetOptions, OpenFile } from '../types/open-file'
 import { areLocalWindowsWslPathAliases } from '../../../../../../shared/cross-platform-path'
+import { editorDocumentIdentityKey, runtimeOwnerKey } from './editor-document-identity'
 import { getConnectionIdForFileFromState } from '@/lib/connection-owner-resolution'
 import { isLocalWindowsDesktopClient } from '@/lib/desktop-window-chrome'
-
-export function runtimeOwnerKey(runtimeEnvironmentId: string | null | undefined): string | null {
-  return runtimeEnvironmentId?.trim() || null
-}
 
 export function isSameEditorOwner(
   file: Pick<OpenFile, 'worktreeId' | 'runtimeEnvironmentId'>,
@@ -119,22 +116,24 @@ export function collectSameDocumentOpenFileIds(
   openFiles: readonly OpenFile[],
   file: Pick<
     OpenFile,
-    'id' | 'filePath' | 'worktreeId' | 'runtimeEnvironmentId' | 'externalSshTargetId' | 'mode'
+    | 'id'
+    | 'filePath'
+    | 'worktreeId'
+    | 'runtimeEnvironmentId'
+    | 'externalSshTargetId'
+    | 'readOnly'
+    | 'liveTail'
+    | 'mode'
   >
 ): Set<string> {
   const fileIds = new Set<string>([file.id])
   if (file.mode !== 'edit') {
     return fileIds
   }
-  const externalSshTargetId = file.externalSshTargetId?.trim() || null
+  const identity = editorDocumentIdentityKey(file)
   const modes = getReusableOpenFileModes(file.mode)
   for (const candidate of openFiles) {
-    if (
-      candidate.filePath === file.filePath &&
-      matchesEditorMode(candidate, modes) &&
-      isSameEditorOwner(candidate, file.worktreeId, file.runtimeEnvironmentId) &&
-      (candidate.externalSshTargetId?.trim() || null) === externalSshTargetId
-    ) {
+    if (matchesEditorMode(candidate, modes) && editorDocumentIdentityKey(candidate) === identity) {
       fileIds.add(candidate.id)
     }
   }

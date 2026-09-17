@@ -104,6 +104,18 @@ describe('hydrated reconciliation orphan editor sweep', () => {
     ])
   })
 
+  it('keeps an orphan whose unsaved draft has not flushed into isDirty yet', () => {
+    const store = prepareStore([openFile(TABBED_FILE_ID), openFile(ORPHAN_FILE_ID)], TABBED_FILE_ID)
+    store.setState({ editorDrafts: { [ORPHAN_FILE_ID]: 'typed but not flushed' } })
+
+    store.getState().reconcileWorktreeTabModels([WORKTREE_ID])
+
+    expect(store.getState().openFiles.map((file) => file.id)).toEqual([
+      TABBED_FILE_ID,
+      ORPHAN_FILE_ID
+    ])
+  })
+
   it('drops a swept document from the tab strip order', () => {
     const store = prepareStore([openFile(TABBED_FILE_ID), openFile(ORPHAN_FILE_ID)], TABBED_FILE_ID)
     store.setState({

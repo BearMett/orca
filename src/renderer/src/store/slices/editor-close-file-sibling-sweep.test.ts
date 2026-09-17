@@ -286,4 +286,40 @@ describe('closeFile duplicate-record sweep', () => {
     expect(store.getState().openFiles).toEqual([])
     expect(store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).toEqual([])
   })
+
+  it('never sweeps a read-only live-tail log along with the writable tab for its path', () => {
+    const store = createEditorTabsStore()
+    const logId = 'editor:log'
+    seed(
+      store,
+      [openFile(FILE_PATH), openFile(logId, { readOnly: true, liveTail: true })],
+      [editorTab(`tab:${FILE_PATH}`, FILE_PATH), editorTab(`tab:${logId}`, logId)],
+      [group(GROUP_ID, [`tab:${FILE_PATH}`, `tab:${logId}`])]
+    )
+
+    store.getState().closeFile(FILE_PATH)
+
+    expect(store.getState().openFiles.map((file) => file.id)).toEqual([logId])
+    expect(
+      (store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).map((tab) => tab.entityId)
+    ).toEqual([logId])
+  })
+
+  it('never sweeps the writable tab along with the read-only log for its path', () => {
+    const store = createEditorTabsStore()
+    const logId = 'editor:log'
+    seed(
+      store,
+      [openFile(FILE_PATH), openFile(logId, { readOnly: true, liveTail: true })],
+      [editorTab(`tab:${FILE_PATH}`, FILE_PATH), editorTab(`tab:${logId}`, logId)],
+      [group(GROUP_ID, [`tab:${FILE_PATH}`, `tab:${logId}`])]
+    )
+
+    store.getState().closeFile(logId)
+
+    expect(store.getState().openFiles.map((file) => file.id)).toEqual([FILE_PATH])
+    expect(
+      (store.getState().unifiedTabsByWorktree[WORKTREE_ID] ?? []).map((tab) => tab.entityId)
+    ).toEqual([FILE_PATH])
+  })
 })

@@ -668,4 +668,69 @@ describe('buildEditorSessionData duplicate collapse', () => {
 
     expect(session.markdownFrontmatterVisible).toEqual({ [FILE]: false })
   })
+
+  it('merges a repeated draft into the variant it agrees with', () => {
+    const ids = [FILE, `editor:b:${FILE}`, `editor:c:${FILE}`]
+    const session = buildEditorSession(
+      ids.map((id) => editOpenFile(id, { isDirty: true })),
+      {
+        editorDrafts: {
+          [ids[0]]: 'left text',
+          [ids[1]]: 'right text',
+          [ids[2]]: 'right text'
+        }
+      }
+    )
+
+    expect(session.openFilesByWorktree[WORKTREE].map((record) => record.dirtyDraftContent)).toEqual(
+      ['left text', 'right text']
+    )
+  })
+
+  it('remaps the active file id onto the variant that absorbed it', () => {
+    const ids = [FILE, `editor:b:${FILE}`, `editor:c:${FILE}`]
+    const session = buildEditorSession(
+      ids.map((id) => editOpenFile(id, { isDirty: true })),
+      {
+        editorDrafts: {
+          [ids[0]]: 'left text',
+          [ids[1]]: 'right text',
+          [ids[2]]: 'right text'
+        },
+        activeFileIdByWorktree: { [WORKTREE]: ids[2] }
+      }
+    )
+
+    expect(session.activeFileIdByWorktree[WORKTREE]).toBe(ids[1])
+  })
+
+  it('merges clean duplicates on both sides of a drafted record', () => {
+    const ids = [FILE, `editor:b:${FILE}`, `editor:c:${FILE}`]
+    const session = buildEditorSession(
+      [editOpenFile(ids[0]), editOpenFile(ids[1], { isDirty: true }), editOpenFile(ids[2])],
+      { editorDrafts: { [ids[1]]: 'right text' } }
+    )
+
+    expect(session.openFilesByWorktree[WORKTREE].map((record) => record.dirtyDraftContent)).toEqual(
+      ['right text']
+    )
+  })
+
+  it('keeps two records when a draft repeats after a divergent one', () => {
+    const ids = [FILE, `editor:b:${FILE}`, `editor:c:${FILE}`]
+    const session = buildEditorSession(
+      ids.map((id) => editOpenFile(id, { isDirty: true })),
+      {
+        editorDrafts: {
+          [ids[0]]: 'left text',
+          [ids[1]]: 'right text',
+          [ids[2]]: 'left text'
+        }
+      }
+    )
+
+    expect(session.openFilesByWorktree[WORKTREE].map((record) => record.dirtyDraftContent)).toEqual(
+      ['left text', 'right text']
+    )
+  })
 })
