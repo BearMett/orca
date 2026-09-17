@@ -37,6 +37,8 @@ export function editorDocumentIdentityKey(
     // Why: a read-only log tab and a writable tab on one path are different documents — merging
     // them would restore the log writable, carrying a hot-exit draft it must never have.
     file.readOnly === true,
-    file.liveTail === true
+    // Why gated on readOnly: the writer persists liveTail only for a read-only row, and an
+    // identity finer than the row it serializes to leaves a duplicate restore cannot tell apart.
+    file.readOnly === true && file.liveTail === true
   ])
 }

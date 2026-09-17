@@ -31,8 +31,8 @@ export function collectHydratedOrphanEditorFileIds(
   const fileIdsByWorktree = new Map<string, Set<string>>()
   for (const file of openFiles) {
     // Why: an unsaved buffer must survive the sweep; only a clean document is disposable chrome.
-    // Why the draft check: isDirty is set by a debounced callback, so a restored or just-typed
-    // draft can exist before the flag flushes.
+    // Why the draft check: a draft is unsaved work whether or not the caller has flushed isDirty,
+    // so the collector must never depend on that flag alone.
     if (file.isDirty === true || editorDrafts[file.id] !== undefined) {
       continue
     }

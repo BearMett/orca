@@ -60,6 +60,12 @@ const documentVariants: {
     sameDocument: false
   },
   {
+    name: 'a writable record beside one flagged live-tail',
+    left: {},
+    right: { liveTail: true },
+    sameDocument: true
+  },
+  {
     name: 'an ssh-pinned record beside a worktree-local one',
     left: {},
     right: { externalSshTargetId: 'ssh-target' },
