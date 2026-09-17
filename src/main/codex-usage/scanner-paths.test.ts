@@ -635,7 +635,14 @@ describe('listCodexSessionFiles', () => {
       type: 'session_meta',
       payload: { id: 'legacy-session', cwd: join(fakeHomeDir, 'repo') }
     })}\n`
-    const scannedPrefix = `${meta}${usageRecord('2026-05-26T12:00:00.000Z', 10)}`
+    // The prefix has to clear MIN_RESUMABLE_PREFIX_BYTES or scan 1 records no
+    // resume point and the transition under test never arises.
+    let padding = ''
+    for (let index = 0; index < 40; index++) {
+      const minute = String(index).padStart(2, '0')
+      padding += usageRecord(`2026-05-26T11:${minute}:00.000Z`, 1, index + 1)
+    }
+    const scannedPrefix = `${meta}${padding}${usageRecord('2026-05-26T12:00:00.000Z', 10, 50)}`
     writeFileSync(systemSessionPath, scannedPrefix, 'utf-8')
 
     // No markers yet, so this scan records a plain incremental resume point.
@@ -647,7 +654,7 @@ describe('listCodexSessionFiles', () => {
 
     // The source grows, then the legacy copy is taken: the copied prefix now
     // reaches past the recorded resume offset.
-    const copiedPrefix = `${scannedPrefix}${usageRecord('2026-05-26T12:01:00.000Z', 3, 13)}`
+    const copiedPrefix = `${scannedPrefix}${usageRecord('2026-05-26T12:01:00.000Z', 3, 53)}`
     writeFileSync(systemSessionPath, copiedPrefix, 'utf-8')
     writeFileSync(runtimeSessionPath, copiedPrefix, 'utf-8')
     mkdirSync(runtimeBridgeMarkerDir, { recursive: true })
@@ -668,25 +675,27 @@ describe('listCodexSessionFiles', () => {
       systemSessionPath,
       [
         copiedPrefix,
-        totalOnlyUsageRecord('2026-05-26T12:02:00.000Z', 30),
-        totalOnlyUsageRecord('2026-05-26T12:03:00.000Z', 34)
+        totalOnlyUsageRecord('2026-05-26T12:02:00.000Z', 70),
+        totalOnlyUsageRecord('2026-05-26T12:03:00.000Z', 74)
       ].join('')
     )
     writeFileSync(
       runtimeSessionPath,
-      `${copiedPrefix}${usageRecord('2026-05-26T12:04:00.000Z', 5, 18)}`
+      `${copiedPrefix}${usageRecord('2026-05-26T12:04:00.000Z', 5, 58)}`
     )
 
     const second = await scanCodexUsageFiles([], first.processedFiles)
+    const cold = await scanCodexUsageFiles([], [])
 
-    // 10 + 3 copied prefix, 5 runtime-only, and the source suffix contributing
-    // 34 - 30 once its leading total-only record is read as a baseline.
+    // 40 padding + 10 + 3 copied prefix, 5 runtime-only, and the source suffix
+    // contributing 74 - 70 once its leading total-only record reads as baseline.
     expect(
       second.dailyAggregates.reduce((total, aggregate) => total + aggregate.totalTokens, 0)
-    ).toBe(22)
+    ).toBe(62)
     expect(
       second.dailyAggregates.reduce((total, aggregate) => total + aggregate.eventCount, 0)
-    ).toBe(4)
+    ).toBe(44)
+    expect(second.dailyAggregates).toEqual(cold.dailyAggregates)
   })
 
   it('treats a leading total-only source suffix record as baseline', async () => {

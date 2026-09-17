@@ -21,12 +21,24 @@ const BOUNDARY_WINDOW_BYTES = 4096
  *  leading session_meta line, which lands in this window. */
 const HEAD_WINDOW_BYTES = 4096
 
-function headWindowEnd(parsedBytes: number): number {
-  return Math.min(HEAD_WINDOW_BYTES, parsedBytes)
-}
+/**
+ * Shortest prefix worth resuming over. A resumed scan verifies the prefix
+ * twice — once when the scanner plans the resume, once against the file it is
+ * about to read — and then records the moved boundary, so it pays five windows
+ * whatever the file size. A cold reparse pays the prefix itself plus the two
+ * windows it records. Below this length reading the whole file is cheaper, and
+ * for a prefix short enough that the two windows overlap it is far cheaper,
+ * because each verification then rehashes the entire prefix.
+ *
+ * Measured on the byte oracle: a 12,191 B prefix costs 21,234 B resumed against
+ * 21,137 B cold; at 13,699 B it is 21,234 B against 22,645 B.
+ */
+export const MIN_RESUMABLE_PREFIX_BYTES = 3 * BOUNDARY_WINDOW_BYTES
 
-function boundaryWindowStart(parsedBytes: number): number {
-  return Math.max(0, parsedBytes - BOUNDARY_WINDOW_BYTES)
+/** Below the floor the two windows could also overlap, so every offset that
+ *  reaches the digest reads is guaranteed to give them a disjoint layout. */
+export function isResumablePrefixLength(parsedBytes: number): boolean {
+  return parsedBytes > MIN_RESUMABLE_PREFIX_BYTES
 }
 
 async function readWindowDigest(
@@ -35,9 +47,6 @@ async function readWindowDigest(
   endExclusive: number
 ): Promise<string | null> {
   const expectedBytes = endExclusive - start
-  if (expectedBytes <= 0) {
-    return `0:${endExclusive}`
-  }
   const hash = createHash('sha256')
   let readBytes = 0
   const stream = createReadStream(filePath, { start, end: endExclusive - 1 })
@@ -55,7 +64,9 @@ type PrefixDigests = { headDigest: string; boundaryDigest: string }
 /**
  * Both window digests for a prefix of `parsedBytes`, or null if the file no
  * longer reaches that offset. The window layout is a pure function of
- * `parsedBytes`, so a later verification hashes exactly the same ranges.
+ * `parsedBytes`, so a later verification hashes exactly the same ranges. Only
+ * called for a prefix past `MIN_RESUMABLE_PREFIX_BYTES`, so the two windows are
+ * always disjoint and always their full size.
  *
  * `carriedHeadDigest` lets a caller that already verified the head window this
  * scan skip re-reading those bytes. Deferring to it is self-correcting: if the
@@ -67,22 +78,17 @@ async function readPrefixDigests(
   parsedBytes: number,
   carriedHeadDigest: string | null = null
 ): Promise<PrefixDigests | null> {
-  const headEnd = headWindowEnd(parsedBytes)
-  const boundaryStart = boundaryWindowStart(parsedBytes)
-  if (boundaryStart <= headEnd) {
-    // The windows meet, so one read covers the whole prefix and there is no
-    // unhashed gap left between them.
-    const wholePrefix = await readWindowDigest(filePath, 0, parsedBytes)
-    return wholePrefix === null ? null : { headDigest: wholePrefix, boundaryDigest: wholePrefix }
-  }
-  // Disjoint windows, so the head window is always its full size here.
   const headDigest = carriedHeadDigest?.startsWith(`${HEAD_WINDOW_BYTES}:`)
     ? carriedHeadDigest
-    : await readWindowDigest(filePath, 0, headEnd)
+    : await readWindowDigest(filePath, 0, HEAD_WINDOW_BYTES)
   if (headDigest === null) {
     return null
   }
-  const boundaryDigest = await readWindowDigest(filePath, boundaryStart, parsedBytes)
+  const boundaryDigest = await readWindowDigest(
+    filePath,
+    parsedBytes - BOUNDARY_WINDOW_BYTES,
+    parsedBytes
+  )
   return boundaryDigest === null ? null : { headDigest, boundaryDigest }
 }
 
@@ -105,6 +111,8 @@ function isUsableResumeState(
     typeof resume.boundaryDigest === 'string' &&
     // State persisted before the head window existed cannot be verified.
     typeof resume.headDigest === 'string' &&
+    // Caches written before the floor existed can hold a shorter prefix.
+    isResumablePrefixLength(resume.parsedBytes) &&
     typeof resume.sessionId === 'string'
   )
 }
@@ -115,6 +123,9 @@ export async function buildCodexRolloutResumeState(
   context: CodexUsageParseContext,
   verifiedHeadDigest: string | null = null
 ): Promise<CodexUsageParseResumeState | null> {
+  if (!isResumablePrefixLength(parsedBytes)) {
+    return null
+  }
   const digests = await readPrefixDigests(filePath, parsedBytes, verifiedHeadDigest)
   if (digests === null) {
     return null

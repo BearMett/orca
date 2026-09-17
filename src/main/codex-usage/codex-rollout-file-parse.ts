@@ -147,7 +147,8 @@ export async function parseCodexUsageFile(
   }
 
   // A counted-but-unterminated tail would be counted again on resume, and a
-  // legacy suffix offset is recomputed per scan, so neither may be resumed.
+  // legacy suffix offset is recomputed per scan, so neither may be resumed. A
+  // prefix under the resumable floor is turned away by the builder itself.
   const resumeStateSuppressed = partialTailProducedEvent || legacySourceSkipBytes > 0
   const parseResumeState = resumeStateSuppressed
     ? null
@@ -159,12 +160,14 @@ export async function parseCodexUsageFile(
         options.resume?.state.headDigest ?? null
       )
 
-  // Why: the builder returns null only on a short read, so the file no longer
-  // reaches `parsedBytes`. It shrank past the prefix this parse merged history
-  // for — after the re-verification above, during the read — and `processedFile`
-  // already re-stat'd to the smaller size, so persisting that pair lets the next
-  // scan reuse a pre-truncation total forever. An unterminated tail proves the
-  // file still runs past the resume offset, so it cannot be this case.
+  // Why: a resume point only exists past the resumable floor and `parsedBytes`
+  // only grows, so the builder's other null — a prefix too short to be worth
+  // resuming — is unreachable here and this null means a short read: the file
+  // shrank past the prefix this parse merged history for, after the
+  // re-verification above and during the read. `processedFile` already re-stat'd
+  // to the smaller size, so persisting that pair would let the next scan reuse a
+  // pre-truncation total forever. An unterminated tail proves the file still
+  // runs past the resume offset, so it cannot be this case.
   if (options.resume && !resumeStateSuppressed && parseResumeState === null) {
     return parseCodexUsageFile(filePath, worktrees, { ...options, resume: undefined })
   }

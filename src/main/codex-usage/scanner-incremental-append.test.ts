@@ -62,6 +62,11 @@ import type { CodexUsagePersistedFile } from './types'
 /** Mirrors BOUNDARY_WINDOW_BYTES in codex-rollout-resume-state.ts. */
 const BOUNDARY_WINDOW_BYTES = 4096
 
+/** Enough records (~377 B each) to put a prefix past MIN_RESUMABLE_PREFIX_BYTES.
+ *  A shorter rollout is always reparsed whole, so a test meaning to exercise the
+ *  resume path has to clear the floor or it silently stops testing anything. */
+const RESUMABLE_RECORDS = 40
+
 const originalCodexHome = process.env.CODEX_HOME
 let fakeHomeDir: string
 let userDataDir: string
@@ -140,10 +145,24 @@ function bytesReadFor(filePath: string): number {
     .reduce((total, entry) => total + entry.bytes, 0)
 }
 
-/** True when a scan opened this file's parse read at byte 0 — a full reparse.
- *  A resumed parse opens its unbounded read at the recorded offset instead. */
+/** Offsets at which this file's parse reads opened, in order. Bounded reads are
+ *  digest windows; an unbounded one at 0 is a full reparse and at the recorded
+ *  offset is a resume, so this says exactly which path a scan took. */
+function parseReadOffsets(filePath: string): number[] {
+  return streamReads
+    .filter((entry) => entry.path === filePath && !entry.bounded)
+    .map((entry) => entry.start)
+}
+
 function reparsedFromStart(filePath: string): boolean {
-  return streamReads.some((entry) => entry.path === filePath && entry.start === 0 && !entry.bounded)
+  return parseReadOffsets(filePath).includes(0)
+}
+
+function recordedResumeOffset(
+  files: { path: string; parseResumeState?: { parsedBytes: number } | null }[],
+  filePath: string
+): number {
+  return files.find((file) => file.path === filePath)?.parseResumeState?.parsedBytes ?? 0
 }
 
 /** Which session each record was attributed to. Totals can be identical across
@@ -225,22 +244,32 @@ describe('scanCodexUsageFiles incremental append', () => {
       rolloutPath,
       [
         sessionMeta('session-cumulative'),
-        totalOnlyUsageRecord('2026-05-26T12:00:00.000Z', 100),
-        totalOnlyUsageRecord('2026-05-26T12:01:00.000Z', 250)
+        // Padding to clear the resumable floor; each record is worth one token
+        // and leaves the running total at RESUMABLE_RECORDS.
+        usageRecordRange(0, RESUMABLE_RECORDS),
+        totalOnlyUsageRecord('2026-05-26T13:00:00.000Z', RESUMABLE_RECORDS + 100),
+        totalOnlyUsageRecord('2026-05-26T13:01:00.000Z', RESUMABLE_RECORDS + 250)
       ].join(''),
       'utf-8'
     )
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(250)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS + 250)
+    const resumeOffset = recordedResumeOffset(first.processedFiles, rolloutPath)
 
     // Only the running total is on the wire, so the appended record's delta
     // depends entirely on the totals carried out of the previous scan.
-    appendFileSync(rolloutPath, totalOnlyUsageRecord('2026-05-26T12:02:00.000Z', 400), 'utf-8')
+    appendFileSync(
+      rolloutPath,
+      totalOnlyUsageRecord('2026-05-26T13:02:00.000Z', RESUMABLE_RECORDS + 400),
+      'utf-8'
+    )
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
+    expect(parseReadOffsets(rolloutPath)).toEqual([resumeOffset])
     const fromScratch = await scanCodexUsageFiles([], [])
-    expect(totalTokens(second.dailyAggregates)).toBe(400)
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 400)
     expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
   })
 
@@ -261,18 +290,26 @@ describe('scanCodexUsageFiles incremental append', () => {
     const toCrlf = (text: string): string => text.replaceAll('\n', '\r\n')
     writeFileSync(
       rolloutPath,
-      toCrlf(`${sessionMeta('session-crlf')}${usageRecordRange(0, 30)}`),
+      toCrlf(`${sessionMeta('session-crlf')}${usageRecordRange(0, RESUMABLE_RECORDS)}`),
       'utf-8'
     )
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(30)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS)
+    const resumeOffset = recordedResumeOffset(first.processedFiles, rolloutPath)
 
-    appendFileSync(rolloutPath, toCrlf(usageRecordRange(30, 33)), 'utf-8')
+    appendFileSync(
+      rolloutPath,
+      toCrlf(usageRecordRange(RESUMABLE_RECORDS, RESUMABLE_RECORDS + 3)),
+      'utf-8'
+    )
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
+    // A one-byte-per-line drift would put this offset inside a record.
+    expect(parseReadOffsets(rolloutPath)).toEqual([resumeOffset])
     const fromScratch = await scanCodexUsageFiles([], [])
-    expect(totalTokens(second.dailyAggregates)).toBe(33)
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 3)
     expect(second.sessions).toEqual(fromScratch.sessions)
   })
 
@@ -280,7 +317,7 @@ describe('scanCodexUsageFiles incremental append', () => {
     const rolloutPath = join(sessionsDir, 'rollout-chatty.jsonl')
     writeFileSync(
       rolloutPath,
-      `${sessionMeta('session-chatty')}${usageRecordRange(0, 10)}`,
+      `${sessionMeta('session-chatty')}${usageRecordRange(0, RESUMABLE_RECORDS)}`,
       'utf-8'
     )
 
@@ -289,13 +326,17 @@ describe('scanCodexUsageFiles incremental append', () => {
     processedFiles = scanned.processedFiles
 
     for (let round = 1; round <= 5; round++) {
-      appendFileSync(rolloutPath, usageRecordRange(round * 10, round * 10 + 10), 'utf-8')
+      const from = RESUMABLE_RECORDS + (round - 1) * 10
+      appendFileSync(rolloutPath, usageRecordRange(from, from + 10), 'utf-8')
+      streamReads.length = 0
       scanned = await scanCodexUsageFiles([], processedFiles)
+      // Every round after the first has to resume, not restart.
+      expect(reparsedFromStart(rolloutPath)).toBe(false)
       processedFiles = scanned.processedFiles
     }
 
     const fromScratch = await scanCodexUsageFiles([], [])
-    expect(totalTokens(scanned.dailyAggregates)).toBe(60)
+    expect(totalTokens(scanned.dailyAggregates)).toBe(RESUMABLE_RECORDS + 50)
     expect(scanned.dailyAggregates).toEqual(fromScratch.dailyAggregates)
     expect(scanned.sessions).toEqual(fromScratch.sessions)
   })
@@ -304,12 +345,14 @@ describe('scanCodexUsageFiles incremental append', () => {
     const rolloutPath = join(sessionsDir, 'rollout-truncated.jsonl')
     writeFileSync(
       rolloutPath,
-      `${sessionMeta('session-truncated')}${usageRecordRange(0, 30)}`,
+      `${sessionMeta('session-truncated')}${usageRecordRange(0, RESUMABLE_RECORDS)}`,
       'utf-8'
     )
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(30)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS)
+    // Without a recorded resume point the fallback below would be trivial.
+    expect(recordedResumeOffset(first.processedFiles, rolloutPath)).toBeGreaterThan(0)
 
     writeFileSync(rolloutPath, `${sessionMeta('session-truncated')}${usageRecordRange(0, 5)}`)
     const second = await scanCodexUsageFiles([], first.processedFiles)
@@ -322,12 +365,16 @@ describe('scanCodexUsageFiles incremental append', () => {
   // history survives the merge as this scan's answer.
   it('reparses from the start when a rollout shrinks during its parse read', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-shrinks-mid-read.jsonl')
-    writeFileSync(rolloutPath, `${sessionMeta('session-shrinker')}${usageRecordRange(0, 20)}`)
+    writeFileSync(
+      rolloutPath,
+      `${sessionMeta('session-shrinker')}${usageRecordRange(0, RESUMABLE_RECORDS)}`
+    )
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(20)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS)
+    const resumeOffset = recordedResumeOffset(first.processedFiles, rolloutPath)
 
-    appendFileSync(rolloutPath, usageRecordRange(20, 22), 'utf-8')
+    appendFileSync(rolloutPath, usageRecordRange(RESUMABLE_RECORDS, RESUMABLE_RECORDS + 2), 'utf-8')
     const truncated = `${sessionMeta('session-shrinker')}${usageRecordRange(0, 5)}`
     onStreamOpen.current = (path, bounded) => {
       // Bounded reads are the digest windows; the unbounded one is the parse
@@ -338,8 +385,11 @@ describe('scanCodexUsageFiles incremental append', () => {
       }
     }
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
     expect(onStreamOpen.current).toBeNull()
+    // Resumed at the recorded offset, then restarted: both halves are the point.
+    expect(parseReadOffsets(rolloutPath)).toEqual([resumeOffset, 0])
     expect(totalTokens(second.dailyAggregates)).toBe(5)
     expect(second.sessions[0]?.eventCount).toBe(5)
     // Nothing resumable may survive either: the recorded prefix is gone.
@@ -361,7 +411,10 @@ describe('scanCodexUsageFiles incremental append', () => {
     const driverPath = join(sessionsDir, 'aaaa-driver.jsonl')
     const targetPath = join(sessionsDir, 'zzzz-grower.jsonl')
     writeFileSync(driverPath, `${sessionMeta('session-driver')}${usageRecordRange(120, 123)}`)
-    writeFileSync(targetPath, `${sessionMeta('session-grower')}${usageRecordRange(0, 20)}`)
+    writeFileSync(
+      targetPath,
+      `${sessionMeta('session-grower')}${usageRecordRange(0, RESUMABLE_RECORDS)}`
+    )
 
     const first = await scanCodexUsageFiles([], [])
     const resumeOffset =
@@ -369,7 +422,7 @@ describe('scanCodexUsageFiles incremental append', () => {
         ?.parsedBytes ?? 0
 
     appendFileSync(driverPath, usageRecordRange(123, 124), 'utf-8')
-    appendFileSync(targetPath, usageRecordRange(20, 22), 'utf-8')
+    appendFileSync(targetPath, usageRecordRange(RESUMABLE_RECORDS, RESUMABLE_RECORDS + 2), 'utf-8')
     const replacement = `${sessionMeta('session-other')}${usageRecordRange(200, 260)}`
     // Past the recorded offset, so every digest window still reads its full size.
     expect(Buffer.byteLength(replacement)).toBeGreaterThan(resumeOffset)
@@ -382,8 +435,13 @@ describe('scanCodexUsageFiles incremental append', () => {
       }
     }
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
     expect(onStreamOpen.current).toBeNull()
+    // The scan planned to resume here, and the point-of-use check is what sends
+    // it back to byte 0 before a single suffix byte is read.
+    expect(resumeOffset).toBeGreaterThan(0)
+    expect(parseReadOffsets(targetPath)).toEqual([0])
     const fromScratch = await scanCodexUsageFiles([], [])
 
     // Stitching leaves `session-grower` owning the records of `session-other`.
@@ -395,11 +453,12 @@ describe('scanCodexUsageFiles incremental append', () => {
 
   it('falls back to a full reparse when a rollout is rewritten at the same size', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-replaced.jsonl')
-    const original = `${sessionMeta('session-a')}${usageRecordRange(0, 20)}`
+    const original = `${sessionMeta('session-a')}${usageRecordRange(0, RESUMABLE_RECORDS)}`
     writeFileSync(rolloutPath, original, 'utf-8')
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(20)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS)
+    expect(recordedResumeOffset(first.processedFiles, rolloutPath)).toBeGreaterThan(0)
 
     // Byte-identical length, different content: only the year changes.
     const replacement = original.replaceAll('2026-05-26T', '2027-05-26T')
@@ -415,22 +474,27 @@ describe('scanCodexUsageFiles incremental append', () => {
 
   it('falls back to a full reparse when a rewritten rollout also grows', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-rotated.jsonl')
-    writeFileSync(rolloutPath, `${sessionMeta('session-a')}${usageRecordRange(0, 20)}`, 'utf-8')
+    writeFileSync(
+      rolloutPath,
+      `${sessionMeta('session-a')}${usageRecordRange(0, RESUMABLE_RECORDS)}`,
+      'utf-8'
+    )
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(20)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS)
+    expect(recordedResumeOffset(first.processedFiles, rolloutPath)).toBeGreaterThan(0)
 
     // Rotation: a fresh, longer file lands at the same path.
     rmSync(rolloutPath)
     writeFileSync(
       rolloutPath,
-      `${sessionMeta('session-b')}${usageRecordRange(0, 20).replaceAll('2026-', '2027-')}${usageRecordRange(20, 25).replaceAll('2026-', '2027-')}`,
+      `${sessionMeta('session-b')}${usageRecordRange(0, RESUMABLE_RECORDS + 5).replaceAll('2026-', '2027-')}`,
       'utf-8'
     )
 
     const second = await scanCodexUsageFiles([], first.processedFiles)
     const fromScratch = await scanCodexUsageFiles([], [])
-    expect(totalTokens(second.dailyAggregates)).toBe(25)
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 5)
     expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
     expect(second.sessions).toEqual(fromScratch.sessions)
   })
@@ -456,30 +520,34 @@ describe('scanCodexUsageFiles incremental append', () => {
   // only the boundary window is left to notice that trailing records changed.
   it('falls back to a full reparse when the records before the offset changed', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-tail-swap.jsonl')
-    const sharedHead = `${sessionMeta('session-tail')}${usageRecordRange(0, 20)}`
+    const swappedFrom = RESUMABLE_RECORDS
+    const swappedTo = RESUMABLE_RECORDS + 10
+    const sharedHead = `${sessionMeta('session-tail')}${usageRecordRange(0, swappedFrom)}`
     expect(sharedHead.length).toBeGreaterThan(BOUNDARY_WINDOW_BYTES)
     let heavierTail = ''
-    for (let index = 20; index < 30; index++) {
+    for (let index = swappedFrom; index < swappedTo; index++) {
       const minute = String(index % 60).padStart(2, '0')
-      heavierTail += usageRecord(`2026-05-26T12:${minute}:00.000Z`, 3, index + 1)
+      const hour = String(12 + (Math.floor(index / 60) % 4)).padStart(2, '0')
+      heavierTail += usageRecord(`2026-05-26T${hour}:${minute}:00.000Z`, 3, index + 1)
     }
-    const original = `${sharedHead}${usageRecordRange(20, 30)}`
+    const original = `${sharedHead}${usageRecordRange(swappedFrom, swappedTo)}`
     const replacement = `${sharedHead}${heavierTail}`
     expect(replacement.length).toBe(original.length)
-    // The windows must be disjoint, or the head digest would span the whole
-    // prefix and this would not isolate the boundary window.
-    expect(original.length).toBeGreaterThan(2 * BOUNDARY_WINDOW_BYTES)
+    // Only the bytes inside the boundary window differ, so the head digest is
+    // blind to this and the boundary digest is the one guard under test.
+    expect(original.length - sharedHead.length).toBeLessThan(BOUNDARY_WINDOW_BYTES)
     writeFileSync(rolloutPath, original, 'utf-8')
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(30)
+    expect(totalTokens(first.dailyAggregates)).toBe(swappedTo)
+    expect(recordedResumeOffset(first.processedFiles, rolloutPath)).toBeGreaterThan(0)
 
     writeFileSync(rolloutPath, replacement, 'utf-8')
 
     const second = await scanCodexUsageFiles([], first.processedFiles)
     const fromScratch = await scanCodexUsageFiles([], [])
     expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
-    expect(totalTokens(second.dailyAggregates)).toBe(50)
+    expect(totalTokens(second.dailyAggregates)).toBe(swappedFrom + 10 * 3)
   })
 
   // Rotation: the path is unlinked and recreated. `physicalFileId` cannot carry
@@ -524,43 +592,42 @@ describe('scanCodexUsageFiles incremental append', () => {
     expect(totalTokens(second.dailyAggregates)).toBe(80)
   })
 
-  // A new session starts smaller than the head window, so its whole prefix is
-  // hashed as one window; once it outgrows both windows the layout switches to
-  // two disjoint ones. Resuming has to survive that switch instead of silently
-  // falling back to a full reparse on every later scan.
-  it('keeps resuming after the prefix outgrows the head window', async () => {
-    const rolloutPath = join(sessionsDir, 'rollout-outgrows-head.jsonl')
+  // A new session is too short to be worth resuming, so it records no resume
+  // point and is reparsed whole. Once it grows past the floor it has to start
+  // resuming, rather than staying on the full-reparse path for the rest of its
+  // life because the first scan left nothing behind.
+  it('starts resuming once the prefix grows past the resumable floor', async () => {
+    const rolloutPath = join(sessionsDir, 'rollout-crosses-floor.jsonl')
     writeFileSync(
       rolloutPath,
-      `${sessionMeta('session-outgrows')}${usageRecordRange(0, 3)}`,
+      `${sessionMeta('session-crosses')}${usageRecordRange(0, 3)}`,
       'utf-8'
     )
-    expect(statSync(rolloutPath).size).toBeLessThan(BOUNDARY_WINDOW_BYTES)
 
     const first = await scanCodexUsageFiles([], [])
     expect(totalTokens(first.dailyAggregates)).toBe(3)
-
-    appendFileSync(rolloutPath, usageRecordRange(3, 40), 'utf-8')
-    const sizeBeforeLastAppend = statSync(rolloutPath).size
-    expect(sizeBeforeLastAppend).toBeGreaterThan(2 * BOUNDARY_WINDOW_BYTES)
-
-    const second = await scanCodexUsageFiles([], first.processedFiles)
-    expect(totalTokens(second.dailyAggregates)).toBe(40)
+    expect(first.processedFiles[0]?.parseResumeState).toBeNull()
 
     streamReads.length = 0
-    appendFileSync(rolloutPath, usageRecordRange(40, 42), 'utf-8')
+    appendFileSync(rolloutPath, usageRecordRange(3, RESUMABLE_RECORDS), 'utf-8')
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS)
+    // Nothing to resume from yet, so this scan reads the whole file.
+    expect(parseReadOffsets(rolloutPath)).toEqual([0])
+    const resumeOffset = recordedResumeOffset(second.processedFiles, rolloutPath)
+    expect(resumeOffset).toBeGreaterThan(0)
+
+    streamReads.length = 0
+    appendFileSync(rolloutPath, usageRecordRange(RESUMABLE_RECORDS, RESUMABLE_RECORDS + 2), 'utf-8')
     const third = await scanCodexUsageFiles([], second.processedFiles)
-    expect(totalTokens(third.dailyAggregates)).toBe(42)
-    // A stale head digest recorded under the old layout would force this scan
-    // to re-read the file from byte 0. Asserted directly rather than as a byte
-    // total: on a rollout this small the bounded windows outweigh the file.
-    expect(reparsedFromStart(rolloutPath)).toBe(false)
+    expect(totalTokens(third.dailyAggregates)).toBe(RESUMABLE_RECORDS + 2)
+    expect(parseReadOffsets(rolloutPath)).toEqual([resumeOffset])
   })
 
   it('does not double-count a record completed after a partial trailing line', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-partial.jsonl')
-    const complete = usageRecordRange(0, 3)
-    const pending = usageRecord('2026-05-26T12:59:00.000Z', 1, 4)
+    const complete = usageRecordRange(0, RESUMABLE_RECORDS)
+    const pending = usageRecord('2026-05-26T12:59:00.000Z', 1, RESUMABLE_RECORDS + 1)
     writeFileSync(
       rolloutPath,
       `${sessionMeta('session-partial')}${complete}${pending.slice(0, 40)}`,
@@ -568,18 +635,23 @@ describe('scanCodexUsageFiles incremental append', () => {
     )
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(3)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS)
 
     // The writer finishes the line and appends one more record.
     writeFileSync(
       rolloutPath,
-      `${sessionMeta('session-partial')}${complete}${pending}${usageRecordRange(4, 5)}`,
+      `${sessionMeta('session-partial')}${complete}${pending}${usageRecordRange(RESUMABLE_RECORDS + 1, RESUMABLE_RECORDS + 2)}`,
       'utf-8'
     )
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
-    expect(totalTokens(second.dailyAggregates)).toBe(5)
-    expect(second.sessions[0]?.eventCount).toBe(5)
+    // The partial tail sits past the recorded offset, so this resumes onto it.
+    expect(parseReadOffsets(rolloutPath)).toEqual([
+      recordedResumeOffset(first.processedFiles, rolloutPath)
+    ])
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 2)
+    expect(second.sessions[0]?.eventCount).toBe(RESUMABLE_RECORDS + 2)
   })
 
   // The case above stops at the parser: its tail is truncated JSON, so no event
@@ -588,8 +660,8 @@ describe('scanCodexUsageFiles incremental append', () => {
   // it or the record lands in the totals twice.
   it('does not double-count a counted tail whose newline was not yet written', async () => {
     const rolloutPath = join(sessionsDir, 'rollout-unflushed-newline.jsonl')
-    const complete = usageRecordRange(0, 3)
-    const pending = usageRecord('2026-05-26T12:59:00.000Z', 1, 4)
+    const complete = usageRecordRange(0, RESUMABLE_RECORDS)
+    const pending = usageRecord('2026-05-26T12:59:00.000Z', 1, RESUMABLE_RECORDS + 1)
     writeFileSync(
       rolloutPath,
       `${sessionMeta('session-unflushed')}${complete}${pending.slice(0, -1)}`,
@@ -598,16 +670,25 @@ describe('scanCodexUsageFiles incremental append', () => {
 
     const first = await scanCodexUsageFiles([], [])
     // The unterminated line is valid JSON, so it is parsed and counted here.
-    expect(totalTokens(first.dailyAggregates)).toBe(4)
-    expect(first.sessions[0]?.eventCount).toBe(4)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS + 1)
+    expect(first.sessions[0]?.eventCount).toBe(RESUMABLE_RECORDS + 1)
+    // The prefix clears the resumable floor, so suppressing the resume point is
+    // the only thing that can force the reparse asserted below.
+    expect(first.processedFiles[0]?.parseResumeState).toBeNull()
 
     // The writer flushes the newline and appends one more record.
-    appendFileSync(rolloutPath, `\n${usageRecordRange(4, 5)}`, 'utf-8')
+    appendFileSync(
+      rolloutPath,
+      `\n${usageRecordRange(RESUMABLE_RECORDS + 1, RESUMABLE_RECORDS + 2)}`,
+      'utf-8'
+    )
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
+    expect(parseReadOffsets(rolloutPath)).toEqual([0])
     const fromScratch = await scanCodexUsageFiles([], [])
-    expect(totalTokens(second.dailyAggregates)).toBe(5)
-    expect(second.sessions[0]?.eventCount).toBe(5)
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 2)
+    expect(second.sessions[0]?.eventCount).toBe(RESUMABLE_RECORDS + 2)
     expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
   })
 
@@ -639,24 +720,35 @@ describe('scanCodexUsageFiles incremental append', () => {
   it('keeps fork ownership when the owning rollout grows incrementally', async () => {
     const originalPath = join(sessionsDir, 'aaaa-original.jsonl')
     const forkPath = join(sessionsDir, 'zzzz-fork.jsonl')
-    const copiedPrefix = `${sessionMeta('session-fork')}${usageRecordRange(0, 4)}`
+    const copiedPrefix = `${sessionMeta('session-fork')}${usageRecordRange(0, RESUMABLE_RECORDS)}`
     writeFileSync(originalPath, copiedPrefix, 'utf-8')
-    writeFileSync(forkPath, `${copiedPrefix}${usageRecordRange(4, 6)}`, 'utf-8')
+    writeFileSync(
+      forkPath,
+      `${copiedPrefix}${usageRecordRange(RESUMABLE_RECORDS, RESUMABLE_RECORDS + 2)}`,
+      'utf-8'
+    )
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(6)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS + 2)
     expect(first.processedFiles.find((file) => file.path === originalPath)?.ownedEventKeys).toEqual(
       expect.arrayContaining([expect.any(String)])
     )
 
-    appendFileSync(originalPath, usageRecordRange(6, 8), 'utf-8')
+    const resumeOffset = recordedResumeOffset(first.processedFiles, originalPath)
+    appendFileSync(
+      originalPath,
+      usageRecordRange(RESUMABLE_RECORDS + 2, RESUMABLE_RECORDS + 4),
+      'utf-8'
+    )
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
-    // 4 shared + 2 fork-only + 2 newly appended, each counted exactly once.
-    expect(totalTokens(second.dailyAggregates)).toBe(8)
+    expect(parseReadOffsets(originalPath)).toEqual([resumeOffset])
+    // shared + 2 fork-only + 2 newly appended, each counted exactly once.
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 4)
     const originalAfter = second.processedFiles.find((file) => file.path === originalPath)
     const forkAfter = second.processedFiles.find((file) => file.path === forkPath)
-    expect(originalAfter?.ownedEventKeys).toHaveLength(6)
+    expect(originalAfter?.ownedEventKeys).toHaveLength(RESUMABLE_RECORDS + 2)
     expect(forkAfter?.ownedEventKeys).toHaveLength(2)
     expect(forkAfter?.hasDeferredClaims).toBe(true)
   })
@@ -664,36 +756,88 @@ describe('scanCodexUsageFiles incremental append', () => {
   it('keeps a new fork from re-claiming events a resumed rollout still owns', async () => {
     const originalPath = join(sessionsDir, 'aaaa-origin.jsonl')
     const forkPath = join(sessionsDir, 'zzzz-late-fork.jsonl')
-    const copiedPrefix = `${sessionMeta('session-late')}${usageRecordRange(0, 4)}`
+    const copiedPrefix = `${sessionMeta('session-late')}${usageRecordRange(0, RESUMABLE_RECORDS)}`
     writeFileSync(originalPath, copiedPrefix, 'utf-8')
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(4)
+    expect(totalTokens(first.dailyAggregates)).toBe(RESUMABLE_RECORDS)
+    const resumeOffset = recordedResumeOffset(first.processedFiles, originalPath)
 
     // The owner grows (resume path) in the same cycle a fork of its prefix appears.
-    appendFileSync(originalPath, usageRecordRange(4, 6), 'utf-8')
-    writeFileSync(forkPath, `${copiedPrefix}${usageRecordRange(6, 7)}`, 'utf-8')
+    appendFileSync(
+      originalPath,
+      usageRecordRange(RESUMABLE_RECORDS, RESUMABLE_RECORDS + 2),
+      'utf-8'
+    )
+    writeFileSync(
+      forkPath,
+      `${copiedPrefix}${usageRecordRange(RESUMABLE_RECORDS + 2, RESUMABLE_RECORDS + 3)}`,
+      'utf-8'
+    )
 
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
-    expect(totalTokens(second.dailyAggregates)).toBe(7)
+    expect(parseReadOffsets(originalPath)).toEqual([resumeOffset])
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 3)
     const forkAfter = second.processedFiles.find((file) => file.path === forkPath)
     expect(forkAfter?.ownedEventKeys).toHaveLength(1)
     expect(forkAfter?.hasDeferredClaims).toBe(true)
   })
 
+  // Pins why the scanner verifies resume points before it seeds event ownership
+  // rather than leaving it to the parse. A rollout that fails verification must
+  // not reserve the keys it used to own: a fork holding those same records is
+  // the only file left that can count them.
+  it('lets a fork reclaim records a rewritten rollout can no longer own', async () => {
+    const originalPath = join(sessionsDir, 'aaaa-rewritten.jsonl')
+    const forkPath = join(sessionsDir, 'zzzz-inheritor.jsonl')
+    const sharedPrefix = `${sessionMeta('session-shared')}${usageRecordRange(0, 40)}`
+    writeFileSync(originalPath, sharedPrefix, 'utf-8')
+
+    const first = await scanCodexUsageFiles([], [])
+    expect(totalTokens(first.dailyAggregates)).toBe(40)
+
+    // The owner is rewritten into an unrelated session, so its resume point no
+    // longer verifies; a fork carrying its old records appears the same cycle.
+    writeFileSync(
+      originalPath,
+      `${sessionMeta('session-rewritten')}${usageRecordRange(100, 140)}`,
+      'utf-8'
+    )
+    writeFileSync(forkPath, `${sharedPrefix}${usageRecordRange(40, 43)}`, 'utf-8')
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    const fromScratch = await scanCodexUsageFiles([], [])
+    expect(eventCountsBySession(second.sessions)).toEqual(
+      eventCountsBySession(fromScratch.sessions)
+    )
+    expect(totalTokens(second.dailyAggregates)).toBe(83)
+  })
+
   it('still reclaims deferred fork claims after an incremental append', async () => {
     const originalPath = join(sessionsDir, 'aaaa-owner.jsonl')
     const forkPath = join(sessionsDir, 'zzzz-deferred.jsonl')
-    const copiedPrefix = `${sessionMeta('session-deferred')}${usageRecordRange(0, 4)}`
+    const copiedPrefix = `${sessionMeta('session-deferred')}${usageRecordRange(0, RESUMABLE_RECORDS)}`
     writeFileSync(originalPath, copiedPrefix, 'utf-8')
-    writeFileSync(forkPath, `${copiedPrefix}${usageRecordRange(4, 6)}`, 'utf-8')
+    writeFileSync(
+      forkPath,
+      `${copiedPrefix}${usageRecordRange(RESUMABLE_RECORDS, RESUMABLE_RECORDS + 2)}`,
+      'utf-8'
+    )
 
     const first = await scanCodexUsageFiles([], [])
+    const resumeOffset = recordedResumeOffset(first.processedFiles, forkPath)
     // The deferring fork is the one that grows, so its deferred flag has to
     // survive the incremental merge or the reclaim below never runs.
-    appendFileSync(forkPath, usageRecordRange(6, 8), 'utf-8')
+    appendFileSync(
+      forkPath,
+      usageRecordRange(RESUMABLE_RECORDS + 2, RESUMABLE_RECORDS + 4),
+      'utf-8'
+    )
+    streamReads.length = 0
     const second = await scanCodexUsageFiles([], first.processedFiles)
-    expect(totalTokens(second.dailyAggregates)).toBe(8)
+    expect(parseReadOffsets(forkPath)).toEqual([resumeOffset])
+    expect(totalTokens(second.dailyAggregates)).toBe(RESUMABLE_RECORDS + 4)
     expect(second.processedFiles.find((file) => file.path === forkPath)?.hasDeferredClaims).toBe(
       true
     )
@@ -701,7 +845,7 @@ describe('scanCodexUsageFiles incremental append', () => {
     rmSync(originalPath)
     const third = await scanCodexUsageFiles([], second.processedFiles)
     expect(third.processedFiles).toHaveLength(1)
-    expect(third.processedFiles[0]?.ownedEventKeys).toHaveLength(8)
-    expect(totalTokens(third.dailyAggregates)).toBe(8)
+    expect(third.processedFiles[0]?.ownedEventKeys).toHaveLength(RESUMABLE_RECORDS + 4)
+    expect(totalTokens(third.dailyAggregates)).toBe(RESUMABLE_RECORDS + 4)
   })
 })
