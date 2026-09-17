@@ -146,6 +146,12 @@ function reparsedFromStart(filePath: string): boolean {
   return streamReads.some((entry) => entry.path === filePath && entry.start === 0 && !entry.bounded)
 }
 
+/** Which session each record was attributed to. Totals can be identical across
+ *  a misattribution, so this is the oracle for anything context-related. */
+function eventCountsBySession(sessions: { sessionId: string; eventCount: number }[]): unknown[] {
+  return sessions.map((session) => [session.sessionId, session.eventCount]).sort()
+}
+
 function totalTokens(aggregates: { totalTokens: number }[]): number {
   return aggregates.reduce((total, aggregate) => total + aggregate.totalTokens, 0)
 }
@@ -342,31 +348,34 @@ describe('scanCodexUsageFiles incremental append', () => {
   })
 
   // The other direction, and the worse half: a replacement *longer* than the
-  // recorded offset reads fine, so no short read ever fires. Cached prefix
-  // context — session id, cwd, model, running totals — would be stitched onto
-  // an unrelated file's records. Corrupted numbers, not merely stale ones. It
-  // lands here while an earlier-sorted rollout is being parsed, which is after
-  // every file's prefix has been verified by the scanner's discovery loop.
+  // recorded offset reads full windows, so no short read can fire. The cached
+  // context — session id, cwd, model, running totals — is stitched onto an
+  // unrelated file's records, running cumulative-delta arithmetic across two
+  // files that have nothing to do with each other.
+  //
+  // Token totals and daily aggregates come out byte-identical to a cold scan
+  // here: the stale prefix contributes exactly as many events as the resumed
+  // read skips. Attribution is the only surviving signal, so the oracle is the
+  // session shape — a totals-based one is provably blind to this.
   it('reparses from the start when a rollout is replaced by a larger file mid-scan', async () => {
     const driverPath = join(sessionsDir, 'aaaa-driver.jsonl')
-    const targetPath = join(sessionsDir, 'zzzz-replaced.jsonl')
+    const targetPath = join(sessionsDir, 'zzzz-grower.jsonl')
     writeFileSync(driverPath, `${sessionMeta('session-driver')}${usageRecordRange(120, 123)}`)
-    writeFileSync(targetPath, `${sessionMeta('session-replaced')}${usageRecordRange(0, 20)}`)
+    writeFileSync(targetPath, `${sessionMeta('session-grower')}${usageRecordRange(0, 20)}`)
 
     const first = await scanCodexUsageFiles([], [])
-    expect(totalTokens(first.dailyAggregates)).toBe(23)
+    const resumeOffset =
+      first.processedFiles.find((file) => file.path === targetPath)?.parseResumeState
+        ?.parsedBytes ?? 0
 
     appendFileSync(driverPath, usageRecordRange(123, 124), 'utf-8')
     appendFileSync(targetPath, usageRecordRange(20, 22), 'utf-8')
-    // Longer than the recorded offset, and every record is a different one.
-    // Three tokens each, so a stitched projection cannot land on the cold total.
-    let unrelatedRecords = ''
-    for (let index = 0; index < 30; index++) {
-      const minute = String(index).padStart(2, '0')
-      unrelatedRecords += usageRecord(`2026-05-26T15:${minute}:00.000Z`, 3, (index + 1) * 3)
-    }
-    const replacement = `${sessionMeta('session-unrelated')}${unrelatedRecords}`
+    const replacement = `${sessionMeta('session-other')}${usageRecordRange(200, 260)}`
+    // Past the recorded offset, so every digest window still reads its full size.
+    expect(Buffer.byteLength(replacement)).toBeGreaterThan(resumeOffset)
     onStreamOpen.current = (path, bounded) => {
+      // Lands while the earlier-sorted rollout is being parsed, which is after
+      // the scanner's discovery loop verified every file's prefix.
       if (path === driverPath && !bounded) {
         onStreamOpen.current = null
         writeFileSync(targetPath, replacement, 'utf-8')
@@ -375,16 +384,12 @@ describe('scanCodexUsageFiles incremental append', () => {
 
     const second = await scanCodexUsageFiles([], first.processedFiles)
     expect(onStreamOpen.current).toBeNull()
-    // No short read can catch this one: the file still reaches the old offset.
-    expect(statSync(targetPath).size).toBeGreaterThan(
-      first.processedFiles.find((file) => file.path === targetPath)?.parseResumeState
-        ?.parsedBytes ?? 0
-    )
-
     const fromScratch = await scanCodexUsageFiles([], [])
-    expect(totalTokens(second.dailyAggregates)).toBe(94)
-    expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
-    // Stitching would also keep the replaced file's session id and first record.
+
+    // Stitching leaves `session-grower` owning the records of `session-other`.
+    expect(eventCountsBySession(second.sessions)).toEqual(
+      eventCountsBySession(fromScratch.sessions)
+    )
     expect(second.sessions).toEqual(fromScratch.sessions)
   })
 
