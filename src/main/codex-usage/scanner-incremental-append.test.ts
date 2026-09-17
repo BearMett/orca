@@ -5,7 +5,7 @@ import type * as NodeFs from 'node:fs'
 import { join } from 'node:path'
 
 const { getPathMock, homedirMock, streamReads, onStreamOpen } = vi.hoisted(() => {
-  const streamReads: { path: string; bytes: number }[] = []
+  const streamReads: { path: string; bytes: number; start: number; bounded: boolean }[] = []
   return {
     getPathMock: vi.fn<(name: string) => string>(),
     homedirMock: vi.fn<() => string>(),
@@ -43,7 +43,12 @@ vi.mock('node:fs', async () => {
       const start = range.start ?? 0
       const size = actual.statSync(filePath).size
       const stop = range.end === undefined ? size : Math.min(size, range.end + 1)
-      streamReads.push({ path: filePath, bytes: Math.max(0, stop - start) })
+      streamReads.push({
+        path: filePath,
+        bytes: Math.max(0, stop - start),
+        start,
+        bounded: range.end !== undefined
+      })
       onStreamOpen.current?.(filePath, range.end !== undefined)
       return actual.createReadStream(path, options)
     }
@@ -135,6 +140,12 @@ function bytesReadFor(filePath: string): number {
     .reduce((total, entry) => total + entry.bytes, 0)
 }
 
+/** True when a scan opened this file's parse read at byte 0 — a full reparse.
+ *  A resumed parse opens its unbounded read at the recorded offset instead. */
+function reparsedFromStart(filePath: string): boolean {
+  return streamReads.some((entry) => entry.path === filePath && entry.start === 0 && !entry.bounded)
+}
+
 function totalTokens(aggregates: { totalTokens: number }[]): number {
   return aggregates.reduce((total, aggregate) => total + aggregate.totalTokens, 0)
 }
@@ -193,11 +204,13 @@ describe('scanCodexUsageFiles incremental append', () => {
     expect(second.sessions[0]?.eventCount).toBe(202)
 
     // The defect: the scanner restarts at byte 0 and re-reads the whole file.
-    // The fix reads the appended bytes plus three bounded windows: a head and a
-    // boundary window to verify the cached prefix, then the moved boundary to
-    // record the new resume point. The head window is carried, not re-read.
+    // The fix reads the appended bytes plus five bounded windows: a head and a
+    // boundary window to plan the resume, both again at the point of use so a
+    // rollout replaced in between cannot be stitched onto, then the moved
+    // boundary to record the new resume point.
+    expect(reparsedFromStart(rolloutPath)).toBe(false)
     expect(bytesReadFor(rolloutPath)).toBeLessThan(sizeBeforeAppend)
-    expect(bytesReadFor(rolloutPath)).toBeLessThanOrEqual(appendedBytes + 3 * BOUNDARY_WINDOW_BYTES)
+    expect(bytesReadFor(rolloutPath)).toBeLessThanOrEqual(appendedBytes + 5 * BOUNDARY_WINDOW_BYTES)
   })
 
   it('carries cumulative token totals across the resume boundary', async () => {
@@ -297,41 +310,82 @@ describe('scanCodexUsageFiles incremental append', () => {
     expect(totalTokens(second.dailyAggregates)).toBe(5)
   })
 
-  // The prefix is verified in the scanner's first pass and read in its second,
-  // so a rollout can shrink in between. The merged projection then keeps the
-  // whole pre-truncation history while the file is re-stat'd to its new, small
-  // size — a cache entry the reuse path matches on and serves forever.
-  it('reparses from the start when a rollout shrinks after its prefix was verified', async () => {
+  // The point-of-use re-check runs just before the parse read opens, so a
+  // rollout truncated in the gap still resumes into a file that no longer
+  // reaches the offset: the stream yields nothing and the whole pre-truncation
+  // history survives the merge as this scan's answer.
+  it('reparses from the start when a rollout shrinks during its parse read', async () => {
+    const rolloutPath = join(sessionsDir, 'rollout-shrinks-mid-read.jsonl')
+    writeFileSync(rolloutPath, `${sessionMeta('session-shrinker')}${usageRecordRange(0, 20)}`)
+
+    const first = await scanCodexUsageFiles([], [])
+    expect(totalTokens(first.dailyAggregates)).toBe(20)
+
+    appendFileSync(rolloutPath, usageRecordRange(20, 22), 'utf-8')
+    const truncated = `${sessionMeta('session-shrinker')}${usageRecordRange(0, 5)}`
+    onStreamOpen.current = (path, bounded) => {
+      // Bounded reads are the digest windows; the unbounded one is the parse
+      // read, which opens after every check this scan is going to make.
+      if (path === rolloutPath && !bounded) {
+        onStreamOpen.current = null
+        writeFileSync(path, truncated, 'utf-8')
+      }
+    }
+
+    const second = await scanCodexUsageFiles([], first.processedFiles)
+    expect(onStreamOpen.current).toBeNull()
+    expect(totalTokens(second.dailyAggregates)).toBe(5)
+    expect(second.sessions[0]?.eventCount).toBe(5)
+    // Nothing resumable may survive either: the recorded prefix is gone.
+    const third = await scanCodexUsageFiles([], second.processedFiles)
+    expect(totalTokens(third.dailyAggregates)).toBe(5)
+  })
+
+  // The other direction, and the worse half: a replacement *longer* than the
+  // recorded offset reads fine, so no short read ever fires. Cached prefix
+  // context — session id, cwd, model, running totals — would be stitched onto
+  // an unrelated file's records. Corrupted numbers, not merely stale ones. It
+  // lands here while an earlier-sorted rollout is being parsed, which is after
+  // every file's prefix has been verified by the scanner's discovery loop.
+  it('reparses from the start when a rollout is replaced by a larger file mid-scan', async () => {
     const driverPath = join(sessionsDir, 'aaaa-driver.jsonl')
-    const targetPath = join(sessionsDir, 'zzzz-shrinker.jsonl')
+    const targetPath = join(sessionsDir, 'zzzz-replaced.jsonl')
     writeFileSync(driverPath, `${sessionMeta('session-driver')}${usageRecordRange(120, 123)}`)
-    writeFileSync(targetPath, `${sessionMeta('session-shrinker')}${usageRecordRange(0, 20)}`)
+    writeFileSync(targetPath, `${sessionMeta('session-replaced')}${usageRecordRange(0, 20)}`)
 
     const first = await scanCodexUsageFiles([], [])
     expect(totalTokens(first.dailyAggregates)).toBe(23)
 
     appendFileSync(driverPath, usageRecordRange(123, 124), 'utf-8')
     appendFileSync(targetPath, usageRecordRange(20, 22), 'utf-8')
-    const truncated = `${sessionMeta('session-shrinker')}${usageRecordRange(0, 5)}`
+    // Longer than the recorded offset, and every record is a different one.
+    // Three tokens each, so a stitched projection cannot land on the cold total.
+    let unrelatedRecords = ''
+    for (let index = 0; index < 30; index++) {
+      const minute = String(index).padStart(2, '0')
+      unrelatedRecords += usageRecord(`2026-05-26T15:${minute}:00.000Z`, 3, (index + 1) * 3)
+    }
+    const replacement = `${sessionMeta('session-unrelated')}${unrelatedRecords}`
     onStreamOpen.current = (path, bounded) => {
-      // The driver's unbounded parse read runs after every file's prefix has
-      // been verified and before the target is re-stat'd: the exact window.
       if (path === driverPath && !bounded) {
         onStreamOpen.current = null
-        writeFileSync(targetPath, truncated, 'utf-8')
+        writeFileSync(targetPath, replacement, 'utf-8')
       }
     }
 
     const second = await scanCodexUsageFiles([], first.processedFiles)
     expect(onStreamOpen.current).toBeNull()
-    expect(totalTokens(second.dailyAggregates)).toBe(9)
+    // No short read can catch this one: the file still reaches the old offset.
+    expect(statSync(targetPath).size).toBeGreaterThan(
+      first.processedFiles.find((file) => file.path === targetPath)?.parseResumeState
+        ?.parsedBytes ?? 0
+    )
 
-    // The kill: size and mtime now agree with disk, so a stale merged total
-    // would be reused unconditionally and no digest would ever get to reject it.
-    const cached = second.processedFiles.find((file) => file.path === targetPath)
-    expect(cached?.size).toBe(statSync(targetPath).size)
-    const third = await scanCodexUsageFiles([], second.processedFiles)
-    expect(totalTokens(third.dailyAggregates)).toBe(9)
+    const fromScratch = await scanCodexUsageFiles([], [])
+    expect(totalTokens(second.dailyAggregates)).toBe(94)
+    expect(second.dailyAggregates).toEqual(fromScratch.dailyAggregates)
+    // Stitching would also keep the replaced file's session id and first record.
+    expect(second.sessions).toEqual(fromScratch.sessions)
   })
 
   it('falls back to a full reparse when a rollout is rewritten at the same size', async () => {
@@ -493,8 +547,9 @@ describe('scanCodexUsageFiles incremental append', () => {
     const third = await scanCodexUsageFiles([], second.processedFiles)
     expect(totalTokens(third.dailyAggregates)).toBe(42)
     // A stale head digest recorded under the old layout would force this scan
-    // to re-read the file from byte 0.
-    expect(bytesReadFor(rolloutPath)).toBeLessThan(sizeBeforeLastAppend)
+    // to re-read the file from byte 0. Asserted directly rather than as a byte
+    // total: on a rollout this small the bounded windows outweigh the file.
+    expect(reparsedFromStart(rolloutPath)).toBe(false)
   })
 
   it('does not double-count a record completed after a partial trailing line', async () => {
@@ -558,7 +613,6 @@ describe('scanCodexUsageFiles incremental append', () => {
       `${sessionMeta('session-same-mtime')}${usageRecordRange(0, 40)}`,
       'utf-8'
     )
-    const sizeBeforeAppend = statSync(rolloutPath).size
 
     const first = await scanCodexUsageFiles([], [])
     expect(totalTokens(first.dailyAggregates)).toBe(40)
@@ -574,7 +628,7 @@ describe('scanCodexUsageFiles incremental append', () => {
     const second = await scanCodexUsageFiles([], cached)
     expect(totalTokens(second.dailyAggregates)).toBe(42)
     expect(second.sessions[0]?.eventCount).toBe(42)
-    expect(bytesReadFor(rolloutPath)).toBeLessThan(sizeBeforeAppend)
+    expect(reparsedFromStart(rolloutPath)).toBe(false)
   })
 
   it('keeps fork ownership when the owning rollout grows incrementally', async () => {

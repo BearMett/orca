@@ -7,7 +7,10 @@ import {
 } from './codex-usage-event-attribution'
 import { parseCodexUsageRecord, type CodexUsageParseContext } from './codex-usage-record-parser'
 import { codexUsageAggregation } from './codex-usage-aggregation'
-import { buildCodexRolloutResumeState } from './codex-rollout-resume-state'
+import {
+  buildCodexRolloutResumeState,
+  resolveCodexRolloutResume
+} from './codex-rollout-resume-state'
 import type {
   CodexUsageAttributedEvent,
   CodexUsageDailyAggregate,
@@ -85,6 +88,19 @@ export async function parseCodexUsageFile(
   worktrees: (CodexUsageWorktreeRef & { canonicalPath: string })[],
   options: CodexRolloutParseOptions = {}
 ): Promise<CodexUsagePersistedFile> {
+  // Why: the caller verified this resume point while walking the directory, and
+  // every file discovered or parsed since then has run in between. Re-verify
+  // here, against the file about to be read, or a rollout replaced in that gap
+  // gets the cached session id, cwd, model and running totals stitched onto an
+  // unrelated file's records — and `processedFile` below re-stats to the new
+  // size, so the reuse path then freezes the corrupted projection.
+  if (
+    options.resume &&
+    (await resolveCodexRolloutResume(filePath, options.resume.previous)) === null
+  ) {
+    return parseCodexUsageFile(filePath, worktrees, { ...options, resume: undefined })
+  }
+
   const processedFile = await getProcessedFileInfo(filePath)
   const legacySourceSkipBytes = options.legacySourceSkipBytes ?? 0
   const startOffset = options.resume?.state.parsedBytes ?? legacySourceSkipBytes
@@ -145,10 +161,10 @@ export async function parseCodexUsageFile(
 
   // Why: the builder returns null only on a short read, so the file no longer
   // reaches `parsedBytes`. It shrank past the prefix this parse merged history
-  // for, and `processedFile` already re-stat'd to the smaller size — persisting
-  // that pair lets the next scan reuse a pre-truncation total forever. An
-  // unterminated tail proves the file still runs past the resume offset, so it
-  // cannot be this case.
+  // for — after the re-verification above, during the read — and `processedFile`
+  // already re-stat'd to the smaller size, so persisting that pair lets the next
+  // scan reuse a pre-truncation total forever. An unterminated tail proves the
+  // file still runs past the resume offset, so it cannot be this case.
   if (options.resume && !resumeStateSuppressed && parseResumeState === null) {
     return parseCodexUsageFile(filePath, worktrees, { ...options, resume: undefined })
   }
