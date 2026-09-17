@@ -244,7 +244,9 @@ export function planHealedPersistedEditorFiles(args: {
     const { file, superseded, ownerRewritten } = survivor
     droppedCount += survivor.droppedCount
     // Why the owner comparison: a divergent-draft survivor keeps its verbatim owner, so its tabs
-    // must not be re-stamped onto a route the record does not follow.
+    // must not be re-stamped onto a route the record does not follow. Accepted: such a tab stays
+    // hidden on the contradicting host until the user resolves the second draft — re-stamping it
+    // would make the tab describe a record that is still runtime-owned.
     const ownerNormalized =
       route !== null &&
       isOwnerHealable(file) &&

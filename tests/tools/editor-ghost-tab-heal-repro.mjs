@@ -192,10 +192,20 @@ function persistedShape(data, worktreeId, paths) {
       activeTabId: group.activeTabId,
       tabOrderLength: group.tabOrder.length,
       recentTabIdsLength: group.recentTabIds?.length ?? 0,
-      // Why resolve the tab's entityId instead of matching the id text: a tab id is opaque, so a
-      // substring match reports references a tracked path never had.
+      // Why entityId first, text match second: a tab id is opaque, so the id text alone reports
+      // references a tracked path never had — but an entry whose tab is gone from unifiedTabs is
+      // the dangling ghost this tool exists to find, and composite ids embed the encoded path.
       pathReferences: [...group.tabOrder, ...(group.recentTabIds ?? [])]
-        .map((id) => ({ id, path: tabEntityById.get(id) ?? null }))
+        .map((id) => {
+          const path = tabEntityById.get(id)
+          return path !== undefined
+            ? { id, path }
+            : {
+                id,
+                path: paths.find((p) => decodeURIComponent(id).includes(p)) ?? null,
+                dangling: true
+              }
+        })
         .filter((reference) => paths.includes(reference.path))
     }))
   }

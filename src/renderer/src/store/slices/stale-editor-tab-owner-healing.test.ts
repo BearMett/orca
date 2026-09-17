@@ -225,7 +225,8 @@ describe('stale editor tab owner healing', () => {
       mode: 'edit',
       isDirty,
       isPreview: false,
-      runtimeEnvironmentId: null
+      runtimeEnvironmentId: null,
+      lastKnownDiskSignature: 'sig-1'
     })
     const written = buildEditorSessionData(
       [liveFile(STALE_TAB_BRAND_PATH, true), liveFile('editor:second-pane', true)],
@@ -239,16 +240,34 @@ describe('stale editor tab owner healing', () => {
 
     const session = buildStaleEditorTabSession()
     session.openFilesByWorktree = written.openFilesByWorktree
-    const state = hydrate(prepareStore(['local']), session)
+    const store = prepareStore(['local'])
+    const state = hydrate(store, session)
 
     const restored = state.openFiles.find((file) => file.filePath === STALE_TAB_BRAND_PATH)
     expect(state.editorDrafts[restored!.id]).toBe('left text')
     expect(state.recentlyClosedEditorTabsByWorktree[STALE_TAB_WORKTREE_ID]).toEqual([
       expect.objectContaining({
         filePath: STALE_TAB_BRAND_PATH,
-        dirtyDraftContent: 'right text'
+        dirtyDraftContent: 'right text',
+        lastKnownDiskSignature: 'sig-1'
       })
     ])
+
+    // Once the user saves the survivor, reopen recovers the parked draft onto that record and must
+    // re-verify the baseline it derives from, exactly as hydrating a dirty record does.
+    store.getState().clearEditorDraft(restored!.id)
+    store.getState().markFileDirty(restored!.id, false)
+    // The saved tab re-baselined off its own disk read, and its verification already cleared.
+    store.getState().setLastKnownDiskSignature(restored!.id, 'sig-2')
+    store.getState().clearPendingDiskBaselineVerification(restored!.id)
+    expect(store.getState().reopenClosedEditorTab(STALE_TAB_WORKTREE_ID)).toBe(true)
+
+    expect(
+      store.getState().openFiles.find((file) => file.filePath === STALE_TAB_BRAND_PATH)
+    ).toMatchObject({
+      lastKnownDiskSignature: 'sig-1',
+      pendingDiskBaselineVerification: true
+    })
   })
 
   it('keeps the only unsaved draft among clean duplicates', () => {

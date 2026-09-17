@@ -8,6 +8,7 @@ import {
 } from '../../recently-closed-tabs'
 import { notifyHostOfMirroredEditorClose } from '@/runtime/close-mirrored-editor-tab'
 import { type ClosedEditorTabSnapshot, MAX_RECENT_CLOSED_EDITOR_TABS } from '../types/open-file'
+import { parkRecoveredEditorDrafts } from './parked-recovered-editor-drafts'
 import {
   deleteUntouchedUntitledFile,
   shouldDeleteUntouchedUntitledFile
@@ -47,28 +48,33 @@ export function createRecentlyClosedEditorTabs(
       const reusedRecordHasUnsavedWork =
         reusedLiveRecord &&
         (draftsBeforeOpen[restoredFileId] !== undefined || dirtyBeforeOpen.has(restoredFileId))
-      if (dirtyDraftContent !== undefined && reusedRecordHasUnsavedWork) {
+      if (
+        dirtyDraftContent !== undefined &&
+        reusedRecordHasUnsavedWork &&
+        // Why: the live record already holds this exact text, so parking would only make the
+        // snapshot unreachable — re-applying it is a no-op.
+        draftsBeforeOpen[restoredFileId] !== dirtyDraftContent
+      ) {
         // Why put the snapshot back: its buffer has nowhere to restore to yet, and dropping it here
         // would destroy the only copy of that unsaved text.
-        set((s) => ({
-          recentlyClosedEditorTabsByWorktree: {
-            ...s.recentlyClosedEditorTabsByWorktree,
-            [worktreeId]: [next, ...(s.recentlyClosedEditorTabsByWorktree[worktreeId] ?? [])].slice(
-              0,
-              MAX_RECENT_CLOSED_EDITOR_TABS
-            )
-          }
-        }))
+        set((s) => parkRecoveredEditorDrafts(s, worktreeId, [next]))
+        // Accepted: reopen keeps handing back this snapshot until the live record is saved or
+        // closed, which beats a parked draft no reopen can ever reach.
         toast.info(
-          `${file.relativePath || file.filePath} is already open with unsaved changes — its recovered draft is still on the reopen stack.`
+          `${file.relativePath || file.filePath} is open with unsaved changes. Save or close it, then reopen to recover the parked draft.`
         )
-        restoreRecentlyClosedTabPosition(get, worktreeId, restoredFileId, position)
         return true
       }
       // Why: the close could not keep this buffer open (a same-owner duplicate held a rival draft), so reopen is its recovery path.
       if (dirtyDraftContent !== undefined) {
         get().setEditorDraft(restoredFileId, dirtyDraftContent)
         get().markFileDirty(restoredFileId, true)
+        // Why: the draft derives from the disk state this baseline was taken over, so the
+        // restored-tab conflict scan must re-verify it before autosave resumes.
+        if (next.lastKnownDiskSignature !== undefined) {
+          get().setLastKnownDiskSignature(restoredFileId, next.lastKnownDiskSignature)
+          get().setPendingDiskBaselineVerification(restoredFileId, true)
+        }
       }
       restoreRecentlyClosedTabPosition(get, worktreeId, restoredFileId, position)
       return true

@@ -7,12 +7,11 @@ import { folderWorkspaceKey } from '../../../../../../shared/workspace-scope'
 import type { WorkspaceVisibleTabType } from '../../../../../../shared/tab-types'
 import type { AppState } from '../../../types'
 import type { PersistedOpenFile } from '../../../../../../shared/workspace-session-state-types'
+import type { ClosedEditorTabSnapshot, OpenFile } from '../types/open-file'
 import {
-  type ClosedEditorTabSnapshot,
-  MAX_RECENT_CLOSED_EDITOR_TABS,
-  type OpenFile
-} from '../types/open-file'
-import { pushRecentlyClosedTabKind } from '../../recently-closed-tabs'
+  parkRecoveredEditorDrafts,
+  type ParkedRecoveredEditorDrafts
+} from './parked-recovered-editor-drafts'
 import { buildValidWorktreeIdsForSessionHydration } from '../../degraded-repo-worktree-validity'
 import { buildOwnedEditorFileId } from '../file-ids/editor-file-ids'
 import { resolveHydratedEditorFileSelection } from '../file-ids/hydrated-editor-file-selection'
@@ -47,7 +46,10 @@ function buildRecoveredDraftSnapshot(
     runtimeEnvironmentId: file.runtimeEnvironmentId,
     externalSshTargetId: file.externalSshTargetId,
     mode: 'edit',
-    dirtyDraftContent: file.dirtyDraftContent
+    dirtyDraftContent: file.dirtyDraftContent,
+    // Why: without the baseline the draft derives from, a reopen restores it with nothing for the
+    // conflict scan to compare, and autosave can clobber an offline write.
+    lastKnownDiskSignature: file.lastKnownDiskSignature
   }
 }
 
@@ -61,20 +63,14 @@ function buildRecoveredDraftReopenState(
   if (worktreeIds.length === 0) {
     return {}
   }
-  const stacks = { ...state.recentlyClosedEditorTabsByWorktree }
-  let kinds = state.recentlyClosedTabKindsByWorktree
+  let parked: ParkedRecoveredEditorDrafts = {
+    recentlyClosedEditorTabsByWorktree: state.recentlyClosedEditorTabsByWorktree,
+    recentlyClosedTabKindsByWorktree: state.recentlyClosedTabKindsByWorktree
+  }
   for (const worktreeId of worktreeIds) {
-    const recovered = recoveredByWorktree[worktreeId]
-    stacks[worktreeId] = [...recovered, ...(stacks[worktreeId] ?? [])].slice(
-      0,
-      MAX_RECENT_CLOSED_EDITOR_TABS
-    )
-    kinds = pushRecentlyClosedTabKind(kinds, worktreeId, 'editor', recovered.length)
+    parked = parkRecoveredEditorDrafts(parked, worktreeId, recoveredByWorktree[worktreeId])
   }
-  return {
-    recentlyClosedEditorTabsByWorktree: stacks,
-    recentlyClosedTabKindsByWorktree: kinds
-  }
+  return parked
 }
 
 export function createHydrateEditorSession(
