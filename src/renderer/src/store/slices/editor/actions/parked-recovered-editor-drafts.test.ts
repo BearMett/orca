@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ClosedEditorTabSnapshot } from '../types/open-file'
 import {
+  deferRecoveredEditorDraft,
   parkRecoveredEditorDrafts,
   type ParkedRecoveredEditorDrafts
 } from './parked-recovered-editor-drafts'
@@ -69,5 +70,46 @@ describe('parkRecoveredEditorDrafts', () => {
       existing.recentlyClosedEditorTabsByWorktree
     )
     expect(parked.recentlyClosedTabKindsByWorktree).toBe(existing.recentlyClosedTabKindsByWorktree)
+  })
+})
+
+describe('deferRecoveredEditorDraft', () => {
+  it('appends the snapshot and its kind to the back of both stacks', () => {
+    const existing = parkRecoveredEditorDrafts(EMPTY, WORKTREE_ID, [snapshot(1), snapshot(2)])
+
+    const deferred = deferRecoveredEditorDraft(existing, WORKTREE_ID, snapshot(3))
+
+    expect(
+      deferred.recentlyClosedEditorTabsByWorktree[WORKTREE_ID].map((entry) => entry.filePath)
+    ).toEqual(['/workspace/draft-1.ts', '/workspace/draft-2.ts', '/workspace/draft-3.ts'])
+    expect(deferred.recentlyClosedTabKindsByWorktree[WORKTREE_ID]).toEqual([
+      'editor',
+      'editor',
+      'editor'
+    ])
+  })
+
+  it('pairs a front park and a tail defer one kind entry each', () => {
+    const parked = parkRecoveredEditorDrafts(EMPTY, WORKTREE_ID, [snapshot(1)])
+
+    const deferred = deferRecoveredEditorDraft(parked, WORKTREE_ID, snapshot(2))
+
+    expect(deferred.recentlyClosedEditorTabsByWorktree[WORKTREE_ID]).toHaveLength(
+      deferred.recentlyClosedTabKindsByWorktree[WORKTREE_ID].length
+    )
+  })
+
+  it('drops the deferred snapshot rather than evicting a newer close at the cap', () => {
+    const full = parkRecoveredEditorDrafts(
+      EMPTY,
+      WORKTREE_ID,
+      Array.from({ length: 10 }, (_value, index) => snapshot(index))
+    )
+
+    const deferred = deferRecoveredEditorDraft(full, WORKTREE_ID, snapshot(99))
+
+    const stack = deferred.recentlyClosedEditorTabsByWorktree[WORKTREE_ID]
+    expect(stack).toHaveLength(10)
+    expect(stack.some((entry) => entry.filePath === '/workspace/draft-99.ts')).toBe(false)
   })
 })

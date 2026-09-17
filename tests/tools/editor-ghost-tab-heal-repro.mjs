@@ -164,6 +164,16 @@ function printScanTable(affectedByWorktree) {
   }
 }
 
+/** Why: a tab id is opaque and may hold a stray `%`, and one bad id must not abort the whole run. */
+function safeDecode(id) {
+  try {
+    return decodeURIComponent(id)
+  } catch (error) {
+    void error
+    return id
+  }
+}
+
 /** Snapshot of the persisted session for the tracked paths — the same fields the store reader returns. */
 function persistedShape(data, worktreeId, paths) {
   const session = data.workspaceSession ?? {}
@@ -192,9 +202,9 @@ function persistedShape(data, worktreeId, paths) {
       activeTabId: group.activeTabId,
       tabOrderLength: group.tabOrder.length,
       recentTabIdsLength: group.recentTabIds?.length ?? 0,
-      // Why entityId first, text match second: a tab id is opaque, so the id text alone reports
-      // references a tracked path never had — but an entry whose tab is gone from unifiedTabs is
-      // the dangling ghost this tool exists to find, and composite ids embed the encoded path.
+      // Why entityId first, text match second: the fallback only recovers dangling entries whose id
+      // embeds the encoded path (bare-path and composite editor ids); a dangling bare-uuid tab id
+      // carries no path and stays invisible here.
       pathReferences: [...group.tabOrder, ...(group.recentTabIds ?? [])]
         .map((id) => {
           const path = tabEntityById.get(id)
@@ -202,7 +212,7 @@ function persistedShape(data, worktreeId, paths) {
             ? { id, path }
             : {
                 id,
-                path: paths.find((p) => decodeURIComponent(id).includes(p)) ?? null,
+                path: paths.find((p) => safeDecode(id).includes(p)) ?? null,
                 dangling: true
               }
         })

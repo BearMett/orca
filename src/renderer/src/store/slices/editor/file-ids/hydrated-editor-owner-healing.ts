@@ -115,9 +115,10 @@ export function resolveHealableWorktreeOwnerRoute(
   return resolution.kind === 'resolved' ? resolution.route : null
 }
 
-/** Why: a pinned read-only/live-tail log and an SSH-pinned external path name their own host, not the worktree's. */
+/** Why no liveTail term: a pinned read-only log and an SSH-pinned external path name their own host,
+ *  and `editorDocumentIdentityKey` only reads liveTail on a read-only row, already excluded here. */
 function isOwnerHealable(file: PersistedOpenFile): boolean {
-  return file.readOnly !== true && file.liveTail !== true && !file.externalSshTargetId?.trim()
+  return file.readOnly !== true && !file.externalSshTargetId?.trim()
 }
 
 function restoredIdCandidates(file: PersistedOpenFile, worktreeId: string): string[] {
@@ -243,10 +244,8 @@ export function planHealedPersistedEditorFiles(args: {
   const healedFiles = survivors.map((survivor) => {
     const { file, superseded, ownerRewritten } = survivor
     droppedCount += survivor.droppedCount
-    // Why the owner comparison: a divergent-draft survivor keeps its verbatim owner, so its tabs
-    // must not be re-stamped onto a route the record does not follow. Accepted: such a tab stays
-    // hidden on the contradicting host until the user resolves the second draft — re-stamping it
-    // would make the tab describe a record that is still runtime-owned.
+    // Why the owner comparison: a divergent-draft survivor keeps its verbatim owner, so re-stamping
+    // its tabs would make them describe a record that still follows a different route.
     const ownerNormalized =
       route !== null &&
       isOwnerHealable(file) &&

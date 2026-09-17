@@ -7,8 +7,11 @@ import {
   restoreRecentlyClosedTabPosition
 } from '../../recently-closed-tabs'
 import { notifyHostOfMirroredEditorClose } from '@/runtime/close-mirrored-editor-tab'
+import { buildEditorActiveResult } from '../tabs/editor-open-target-group'
 import { type ClosedEditorTabSnapshot, MAX_RECENT_CLOSED_EDITOR_TABS } from '../types/open-file'
-import { parkRecoveredEditorDrafts } from './parked-recovered-editor-drafts'
+import { deferRecoveredEditorDraft } from './parked-recovered-editor-drafts'
+import { editorDocumentIdentityKey } from '../file-ids/editor-document-identity'
+import { getReusableOpenFileModes, matchesEditorMode } from '../file-ids/editor-file-ids'
 import {
   deleteUntouchedUntitledFile,
   shouldDeleteUntouchedUntitledFile
@@ -32,8 +35,45 @@ export function createRecentlyClosedEditorTabs(
         }
       }))
       const { position, reopenId, dirtyDraftContent, ...file } = next
-      // Why captured before the open: openFile reuses a live same-owner record for this path, and
-      // the snapshot's draft must never overwrite whatever that record is already holding.
+      const collisionToast = (): void => {
+        toast.info(
+          `${file.relativePath || file.filePath} is open with unsaved changes. Save or close it, then reopen to recover the parked draft.`
+        )
+      }
+      // Why both halves: setActiveFile promotes the record's unified tab inside its group, and the
+      // open-target result raises the editor surface the normal open path would have raised.
+      const activateLiveRecord = (liveFileId: string): void => {
+        get().setActiveFile(liveFileId)
+        set((s) => buildEditorActiveResult(s, file.worktreeId, liveFileId))
+      }
+      if (dirtyDraftContent !== undefined) {
+        // Why decided before the open: openFile would give the live record a second unified tab in
+        // the snapshot's group, and the writes below would then land on the wrong document.
+        const beforeCollisionCheck = get()
+        const identity = editorDocumentIdentityKey(file)
+        const modes = getReusableOpenFileModes(file.mode)
+        const live = beforeCollisionCheck.openFiles.find(
+          (candidate) =>
+            matchesEditorMode(candidate, modes) && editorDocumentIdentityKey(candidate) === identity
+        )
+        const liveDraft = live ? beforeCollisionCheck.editorDrafts[live.id] : undefined
+        if (live && liveDraft === dirtyDraftContent) {
+          // Why nothing is written: the live record already holds this exact text, so the draft and
+          // baseline writes would only replace a newer baseline with the snapshot's older one.
+          activateLiveRecord(live.id)
+          return true
+        }
+        if (live && (liveDraft !== undefined || live.isDirty === true)) {
+          // Why deferred rather than dropped: the snapshot holds the only copy of that unsaved text.
+          set((s) => deferRecoveredEditorDraft(s, worktreeId, next))
+          // Why activate: the toast names a document the user must act on, so show it to them.
+          activateLiveRecord(live.id)
+          collisionToast()
+          return true
+        }
+      }
+      // Why captured before the open: openFile's reuse rule is coarser than the identity key above
+      // (it also reuses across local/WSL path aliases), so a collision can still surface here.
       const beforeOpen = get()
       const reusableRecordIds = new Set(beforeOpen.openFiles.map((f) => f.id))
       const draftsBeforeOpen = beforeOpen.editorDrafts
@@ -57,12 +97,8 @@ export function createRecentlyClosedEditorTabs(
       ) {
         // Why put the snapshot back: its buffer has nowhere to restore to yet, and dropping it here
         // would destroy the only copy of that unsaved text.
-        set((s) => parkRecoveredEditorDrafts(s, worktreeId, [next]))
-        // Accepted: reopen keeps handing back this snapshot until the live record is saved or
-        // closed, which beats a parked draft no reopen can ever reach.
-        toast.info(
-          `${file.relativePath || file.filePath} is open with unsaved changes. Save or close it, then reopen to recover the parked draft.`
-        )
+        set((s) => deferRecoveredEditorDraft(s, worktreeId, next))
+        collisionToast()
         return true
       }
       // Why: the close could not keep this buffer open (a same-owner duplicate held a rival draft), so reopen is its recovery path.

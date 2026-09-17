@@ -143,6 +143,18 @@ describe('editor document identity at the restore heal', () => {
     expect(healedFiles([persistedFile(), persistedFile({ readOnly: true })])).toHaveLength(2)
   })
 
+  it('heals the owner of a writable live-tail record, which the key treats as writable', () => {
+    const healed = planHealedPersistedEditorFiles({
+      files: [persistedFile({ runtimeEnvironmentId: 'env-stale', liveTail: true })],
+      worktreeId: WORKTREE_ID,
+      route: { executionHostId: 'local', runtimeEnvironmentId: null },
+      persistedActiveFileId: null
+    })
+
+    expect(healed.files[0].file.runtimeEnvironmentId).toBeNull()
+    expect(healed.ownerRewrittenCount).toBe(1)
+  })
+
   it('keeps an ssh-pinned record apart from the worktree-local one', () => {
     expect(
       healedFiles([persistedFile(), persistedFile({ externalSshTargetId: 'ssh-target' })])
