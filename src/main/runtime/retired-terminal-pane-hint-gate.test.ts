@@ -13,7 +13,7 @@ const LEAF_ID = '11111111-1111-4111-8111-111111111111'
 const OTHER_LEAF_ID = '22222222-2222-4222-8222-222222222222'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-const liveSurface = { type: 'terminal', parentTabId: 'tab-1', leafId: LEAF_ID }
+const publishesNothing = (): boolean => false
 
 function ledgerWithRetiredPane(leafId = LEAF_ID): RetiredTerminalPaneLedger {
   const ledger = new RetiredTerminalPaneLedger()
@@ -25,14 +25,14 @@ function resolve(args: {
   hintedTabId?: string
   hintedLeafId?: string
   retiredPanes?: RetiredTerminalPaneLedger
-  publishedSurfaces?: { type: string; parentTabId?: string; leafId?: string }[]
+  isSurfacePublished?: (tabId: string, leafId: string) => boolean
 }): { tabId: string; leafId: string } {
   return resolveHintedTerminalPaneIdentity(
     { tabId: args.hintedTabId, leafId: args.hintedLeafId },
     {
       worktreeId: WORKTREE_ID,
       retiredPanes: args.retiredPanes ?? new RetiredTerminalPaneLedger(),
-      publishedSurfaces: args.publishedSurfaces
+      isSurfacePublished: args.isSurfacePublished ?? publishesNothing
     }
   )
 }
@@ -43,8 +43,7 @@ describe('resolveHintedTerminalPaneIdentity', () => {
       resolve({
         hintedTabId: 'tab-1',
         hintedLeafId: LEAF_ID,
-        retiredPanes: ledgerWithRetiredPane(),
-        publishedSurfaces: []
+        retiredPanes: ledgerWithRetiredPane()
       })
     ).toThrow(RETIRED_TERMINAL_PANE_HINT_ERROR)
   })
@@ -57,7 +56,7 @@ describe('resolveHintedTerminalPaneIdentity', () => {
         hintedTabId: 'tab-1',
         hintedLeafId: LEAF_ID,
         retiredPanes: ledgerWithRetiredPane(),
-        publishedSurfaces: [liveSurface]
+        isSurfacePublished: (tabId, leafId) => tabId === 'tab-1' && leafId === LEAF_ID
       })
     ).toEqual({ tabId: 'tab-1', leafId: LEAF_ID })
   })

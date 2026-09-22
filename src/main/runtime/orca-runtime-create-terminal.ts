@@ -36,13 +36,12 @@ export class OrcaRuntimeWithCreateTerminal extends OrcaRuntimeWithTerminalCreate
       let preAllocatedHandle =
         launchOpts.preAllocatedHandle ?? this.createPreAllocatedTerminalHandle()
       // Refuses a hint naming a pane this host retired instead of adopting it on id format alone.
-      const pane = resolveHintedTerminalPaneIdentity(launchOpts, {
+      let { tabId, leafId } = resolveHintedTerminalPaneIdentity(launchOpts, {
         worktreeId: workspace.id,
         retiredPanes: this.retiredTerminalPanes,
-        publishedSurfaces: this.mobileSessionTabsByWorktree.get(workspace.id)?.tabs
+        isSurfacePublished: (hintedTab, hintedLeaf) =>
+          this.mobileSessionSnapshotHasSurface(workspace.id, hintedTab, hintedLeaf)
       })
-      let tabId = pane.tabId
-      let leafId = pane.leafId
       let paneKey = dependencies.makePaneKey(tabId, leafId)
       const claimedStablePaneCreate = this.ptyController.claimStablePaneCreate?.({
         worktreeId: workspace.id,

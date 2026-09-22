@@ -21,6 +21,7 @@ import type {
   RuntimeTerminalSend
 } from '../../../../shared/runtime-types'
 import { TERMINAL_CREATE_IDEMPOTENCY_RUNTIME_CAPABILITY } from '../../../../shared/protocol-version'
+import { hasRuntimeRpcErrorCode } from '../../../../shared/runtime-rpc-error-code'
 import { agentResumeHostAuthorityCapability } from '../../runtime/agent-resume-host-authority-capability'
 import {
   isTerminalInputTooLargeWithDeferredMeasurement,
@@ -2408,7 +2409,12 @@ export function createRemoteRuntimePtyTransport(
         if (!destroyed && lifecycleEpoch === connectLifecycleEpoch) {
           connecting = false
           const message = runtimeTerminalErrorMessage(error)
-          if (isRemoteTerminalGoneMessage(message)) {
+          if (hasRuntimeRpcErrorCode(error, 'tab_not_found')) {
+            // The host refusing to create under this pane's ids is its own evidence the surface is
+            // gone, so settle rather than surface it. Not folded into isRemoteTerminalGoneMessage:
+            // that also classifies the subscribe path, which may still re-resolve the same pane.
+            retireRemoteTerminalId()
+          } else if (isRemoteTerminalGoneMessage(message)) {
             recovery.cancel()
             handleRemoteTerminalError(error)
           } else if (

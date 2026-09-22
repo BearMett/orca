@@ -3,25 +3,9 @@ import { isTerminalLeafId } from '../../shared/stable-pane-id'
 import { isValidHostTerminalTabId } from '../../shared/terminal-tab-id'
 import type { RetiredTerminalPaneLedger } from './retired-terminal-pane-ledger'
 
-/** What the host answers a create that hints a pane it already retired. The client reads this as
- *  definitive surface absence and settles the pane without retrying. */
+/** What the host answers a create that hints a pane it already retired. No client retries it:
+ *  an updated one settles the pane as absent, an older one surfaces the token as an error. */
 export const RETIRED_TERMINAL_PANE_HINT_ERROR = 'tab_not_found'
-
-/** The shape of a published session tab this gate reads; the full row carries much more. */
-type PublishedSurface = { type: string; parentTabId?: string; leafId?: string }
-
-function publishesLiveSurface(
-  surfaces: readonly PublishedSurface[] | undefined,
-  tabId: string,
-  leafId: string
-): boolean {
-  return (
-    surfaces?.some(
-      (surface) =>
-        surface.type === 'terminal' && surface.parentTabId === tabId && surface.leafId === leafId
-    ) === true
-  )
-}
 
 /**
  * The pane identity a create commits to: the caller's hinted ids when the host may adopt them, a
@@ -39,7 +23,7 @@ export function resolveHintedTerminalPaneIdentity(
   host: {
     worktreeId: string
     retiredPanes: RetiredTerminalPaneLedger
-    publishedSurfaces: readonly PublishedSurface[] | undefined
+    isSurfacePublished: (tabId: string, leafId: string) => boolean
   }
 ): { tabId: string; leafId: string } {
   const hintedTabId = hint.tabId?.trim()
@@ -54,7 +38,7 @@ export function resolveHintedTerminalPaneIdentity(
   }
   if (
     host.retiredPanes.has(host.worktreeId, hintedTabId, hintedLeafId) &&
-    !publishesLiveSurface(host.publishedSurfaces, hintedTabId, hintedLeafId)
+    !host.isSurfacePublished(hintedTabId, hintedLeafId)
   ) {
     throw new Error(RETIRED_TERMINAL_PANE_HINT_ERROR)
   }
