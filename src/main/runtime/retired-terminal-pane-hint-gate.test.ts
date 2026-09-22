@@ -17,7 +17,7 @@ const publishesNothing = (): boolean => false
 
 function ledgerWithRetiredPane(leafId = LEAF_ID): RetiredTerminalPaneLedger {
   const ledger = new RetiredTerminalPaneLedger()
-  ledger.record(WORKTREE_ID, 'tab-1', leafId, 1)
+  ledger.record(WORKTREE_ID, 'tab-1', leafId)
   return ledger
 }
 
@@ -59,6 +59,24 @@ describe('resolveHintedTerminalPaneIdentity', () => {
         isSurfacePublished: (tabId, leafId) => tabId === 'tab-1' && leafId === LEAF_ID
       })
     ).toEqual({ tabId: 'tab-1', leafId: LEAF_ID })
+  })
+
+  // Otherwise a snapshot that briefly stops listing the pane would refuse the live pane it names.
+  it('forgets the retirement once the pane is adopted again', () => {
+    const retiredPanes = ledgerWithRetiredPane()
+
+    resolve({
+      hintedTabId: 'tab-1',
+      hintedLeafId: LEAF_ID,
+      retiredPanes,
+      isSurfacePublished: () => true
+    })
+
+    expect(retiredPanes.has(WORKTREE_ID, 'tab-1', LEAF_ID)).toBe(false)
+    expect(resolve({ hintedTabId: 'tab-1', hintedLeafId: LEAF_ID, retiredPanes })).toEqual({
+      tabId: 'tab-1',
+      leafId: LEAF_ID
+    })
   })
 
   it('adopts a hint the host holds no retirement for', () => {
@@ -108,10 +126,20 @@ describe('RetiredTerminalPaneLedger', () => {
     expect(ledger.has('repo-1::/tmp/worktree-b', 'tab-1', LEAF_ID)).toBe(false)
   })
 
+  it('forgets one pane without disturbing its siblings', () => {
+    const ledger = ledgerWithRetiredPane()
+    ledger.record(WORKTREE_ID, 'tab-1', OTHER_LEAF_ID)
+
+    ledger.forget(WORKTREE_ID, 'tab-1', LEAF_ID)
+
+    expect(ledger.has(WORKTREE_ID, 'tab-1', LEAF_ID)).toBe(false)
+    expect(ledger.has(WORKTREE_ID, 'tab-1', OTHER_LEAF_ID)).toBe(true)
+  })
+
   it('evicts the oldest records past its cap', () => {
     const ledger = new RetiredTerminalPaneLedger()
     for (let index = 0; index <= MAX_RETIRED_TERMINAL_PANE_RECORDS; index += 1) {
-      ledger.record(WORKTREE_ID, `tab-${index}`, LEAF_ID, index)
+      ledger.record(WORKTREE_ID, `tab-${index}`, LEAF_ID)
     }
 
     expect(ledger.size).toBe(MAX_RETIRED_TERMINAL_PANE_RECORDS)

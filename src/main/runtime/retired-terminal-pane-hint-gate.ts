@@ -42,5 +42,7 @@ export function resolveHintedTerminalPaneIdentity(
   ) {
     throw new Error(RETIRED_TERMINAL_PANE_HINT_ERROR)
   }
+  // Adopting settles the pane's retirement, so a later transient absence cannot refuse it again.
+  host.retiredPanes.forget(host.worktreeId, hintedTabId, hintedLeafId)
   return { tabId: hintedTabId, leafId: hintedLeafId }
 }

@@ -1,5 +1,9 @@
-/** Bounded so a host that runs for weeks cannot grow this without limit. */
-export const MAX_RETIRED_TERMINAL_PANE_RECORDS = 512
+/**
+ * Bounded so a host that runs for weeks cannot grow this without limit. Generous because it is one
+ * set for the whole host rather than per worktree, and only deliberate closes reach it — a natural
+ * shell exit never records, so the churn this has to outlive is operator closes and worker releases.
+ */
+export const MAX_RETIRED_TERMINAL_PANE_RECORDS = 4096
 
 /**
  * The host's own pane-keyed record that it retired a terminal surface.
@@ -13,30 +17,36 @@ export const MAX_RETIRED_TERMINAL_PANE_RECORDS = 512
  * form, so there is nothing for a persisted record to protect that the client's own resync does not.
  */
 export class RetiredTerminalPaneLedger {
-  private readonly retiredAtByKey = new Map<string, number>()
+  // Insertion-ordered, so the iteration order below is oldest-first.
+  private readonly retiredKeys = new Set<string>()
 
   private static key(worktreeId: string, tabId: string, leafId: string): string {
     return `${worktreeId}\0${tabId}\0${leafId}`
   }
 
-  record(worktreeId: string, tabId: string, leafId: string, retiredAt: number): void {
+  record(worktreeId: string, tabId: string, leafId: string): void {
     const key = RetiredTerminalPaneLedger.key(worktreeId, tabId, leafId)
-    this.retiredAtByKey.delete(key)
-    this.retiredAtByKey.set(key, retiredAt)
-    while (this.retiredAtByKey.size > MAX_RETIRED_TERMINAL_PANE_RECORDS) {
-      const oldest = this.retiredAtByKey.keys().next().value
+    this.retiredKeys.delete(key)
+    this.retiredKeys.add(key)
+    while (this.retiredKeys.size > MAX_RETIRED_TERMINAL_PANE_RECORDS) {
+      const oldest = this.retiredKeys.values().next().value
       if (typeof oldest !== 'string') {
         break
       }
-      this.retiredAtByKey.delete(oldest)
+      this.retiredKeys.delete(oldest)
     }
   }
 
   has(worktreeId: string, tabId: string, leafId: string): boolean {
-    return this.retiredAtByKey.has(RetiredTerminalPaneLedger.key(worktreeId, tabId, leafId))
+    return this.retiredKeys.has(RetiredTerminalPaneLedger.key(worktreeId, tabId, leafId))
+  }
+
+  /** Called once a create adopts the pane again, so a later transient absence cannot refuse it. */
+  forget(worktreeId: string, tabId: string, leafId: string): void {
+    this.retiredKeys.delete(RetiredTerminalPaneLedger.key(worktreeId, tabId, leafId))
   }
 
   get size(): number {
-    return this.retiredAtByKey.size
+    return this.retiredKeys.size
   }
 }

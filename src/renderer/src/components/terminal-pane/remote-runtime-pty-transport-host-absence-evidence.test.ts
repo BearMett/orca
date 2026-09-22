@@ -97,10 +97,22 @@ describe('remote runtime pty transport host absence evidence', () => {
     })
 
     const onError = vi.fn()
-    const result = await transport.connect({ url: '', callbacks: { onError } })
+    const onExit = vi.fn()
+    const onDisconnect = vi.fn()
+    const onRecoveryStateChange = vi.fn()
+    const result = await transport.connect({
+      url: '',
+      callbacks: { onError, onExit, onDisconnect, onRecoveryStateChange }
+    })
 
     expect(result).toBeUndefined()
     expect(onError).not.toHaveBeenCalled()
+    // The create never minted a pty id, so this settle is the pane's only exit signal.
+    expect(onExit).toHaveBeenCalledWith(0)
+    expect(onDisconnect).toHaveBeenCalled()
+    expect(onRecoveryStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ phase: 'ended' })
+    )
     expect(
       runtimeCall.mock.calls.filter((call) => call[0]?.method === 'terminal.create')
     ).toHaveLength(1)

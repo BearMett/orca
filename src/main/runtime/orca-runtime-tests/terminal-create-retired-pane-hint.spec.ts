@@ -35,7 +35,9 @@ describe('terminal.create refuses a pane identity the host already retired', () 
       title: 'Terminal'
     })
 
-    // The host user closing the tab kills the PTY, and that exit is what retires the surface.
+    // The host user closing the tab kills the PTY through pty:kill, which marks the stop before
+    // the exit lands; that pairing is what onPtyExit reads back as an operator close.
+    runtime.markPtyStopRequested(created.ptyId!)
     runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
 
     await expect(
@@ -96,6 +98,7 @@ describe('terminal.create refuses a pane identity the host already retired', () 
     // Mirroring the pane is what makes the host mint the handle its retirement proof is keyed by.
     await runtime.listTerminals(`id:${TEST_WORKTREE_ID}`)
 
+    runtime.markPtyStopRequested('pty-desktop')
     runtime.onPtyExit('pty-desktop', 0, undefined, { hostExitConfirmed: true })
 
     await expect(
@@ -105,6 +108,27 @@ describe('terminal.create refuses a pane identity the host already retired', () 
       })
     ).rejects.toThrow('tab_not_found')
     expect(spawn).not.toHaveBeenCalled()
+  })
+
+  // A shell the user exited by hand retires the surface the same way, and on a headless host
+  // nothing republishes it — so only a deliberate close may refuse the pane's restart in place.
+  it('still adopts the hinted id after a natural shell exit', async () => {
+    const { runtime, spawn } = createRuntimeWithSpawn()
+    const created = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'exited-shell-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+
+    // No stop was requested, so onPtyExit cannot read this back as an operator close.
+    runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
+
+    const restarted = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'exited-shell-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+
+    expect(restarted.tabId).toBe('exited-shell-tab')
+    expect(spawn).toHaveBeenCalledTimes(2)
   })
 
   it('still adopts a hinted id the host never retired', async () => {
@@ -129,6 +153,7 @@ describe('terminal.create refuses a pane identity the host already retired', () 
       tabId: 'retired-sibling-tab',
       leafId: HEADLESS_LEAF_ID
     })
+    runtime.markPtyStopRequested(created.ptyId!)
     runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
 
     const fresh = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`)
@@ -143,6 +168,7 @@ describe('terminal.create refuses a pane identity the host already retired', () 
       tabId: 'split-owner-tab',
       leafId: HEADLESS_LEAF_ID
     })
+    runtime.markPtyStopRequested(first.ptyId!)
     runtime.onPtyExit(first.ptyId!, 0, undefined, { hostExitConfirmed: true })
 
     // The refusal is per paneKey, so a different leaf under the same tab id is not the retired pane.

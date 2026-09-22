@@ -224,7 +224,7 @@ export class OrcaRuntimeWithOnPtyExit extends OrcaRuntimeWithOnClientDisconnecte
     } else {
       // Why: permanent process exit is absence, not a starting/sleeping tab.
       // Retire before publishing so paired clients never persist a ghost.
-      this.retireMobileSessionSurfacesForPty(ptyId, incarnationId, exactSurfaces)
+      this.retireMobileSessionSurfacesForPty(ptyId, incarnationId, exactSurfaces, exitCause)
     }
 
     const exitedSurfaces: { handle: string; paneKey: string | null }[] = []

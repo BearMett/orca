@@ -21,7 +21,6 @@ import type {
   RuntimeTerminalSend
 } from '../../../../shared/runtime-types'
 import { TERMINAL_CREATE_IDEMPOTENCY_RUNTIME_CAPABILITY } from '../../../../shared/protocol-version'
-import { hasRuntimeRpcErrorCode } from '../../../../shared/runtime-rpc-error-code'
 import { agentResumeHostAuthorityCapability } from '../../runtime/agent-resume-host-authority-capability'
 import {
   isTerminalInputTooLargeWithDeferredMeasurement,
@@ -2409,11 +2408,19 @@ export function createRemoteRuntimePtyTransport(
         if (!destroyed && lifecycleEpoch === connectLifecycleEpoch) {
           connecting = false
           const message = runtimeTerminalErrorMessage(error)
-          if (hasRuntimeRpcErrorCode(error, 'tab_not_found')) {
+          if (isMissingHostSessionSurfaceError(error)) {
             // The host refusing to create under this pane's ids is its own evidence the surface is
             // gone, so settle rather than surface it. Not folded into isRemoteTerminalGoneMessage:
             // that also classifies the subscribe path, which may still re-resolve the same pane.
+            const settledPtyId = remotePtyId
             retireRemoteTerminalId()
+            if (!settledPtyId) {
+              // A create that never minted a pty id leaves retireRemoteTerminalId nothing to
+              // notify, so the pane would sit blank with no exit overlay. Same settle the stream's
+              // own end handler publishes.
+              storedCallbacks.onExit?.(0)
+              storedCallbacks.onDisconnect?.()
+            }
           } else if (isRemoteTerminalGoneMessage(message)) {
             recovery.cancel()
             handleRemoteTerminalError(error)
