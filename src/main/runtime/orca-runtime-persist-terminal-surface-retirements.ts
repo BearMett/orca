@@ -135,6 +135,17 @@ export class OrcaRuntimeWithPersistTerminalSurfaceRetirements extends OrcaRuntim
     if (retiredSurfaces.length === 0) {
       return
     }
+    // Why before the handle-keyed proofs below: a create replaying these ids must be refused even
+    // for a pane no client ever addressed by handle, which publishes no proof.
+    const retiredAt = Date.now()
+    for (const surface of retiredSurfaces) {
+      this.retiredTerminalPanes.record(
+        surface.worktreeId,
+        surface.parentTabId,
+        surface.leafId,
+        retiredAt
+      )
+    }
     const persisted = this.persistTerminalSurfaceRetirements(retiredSurfaces)
     if (!persisted) {
       return
