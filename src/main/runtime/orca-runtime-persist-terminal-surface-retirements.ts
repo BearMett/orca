@@ -101,11 +101,13 @@ export class OrcaRuntimeWithPersistTerminalSurfaceRetirements extends OrcaRuntim
     return { accepted, unpersisted }
   }
 
+  /** Publishes a dead PTY's surfaces as absent, and records the pane when the close was final. */
   protected retireMobileSessionSurfacesForPty(
     ptyId: string,
     incarnationId: string,
     exactSurfaces: readonly Pick<RetiredTerminalSurface, 'worktreeId' | 'parentTabId' | 'leafId'>[],
-    exitCause?: TerminalExitCause
+    exitCause?: TerminalExitCause,
+    opts?: { reversibleStop?: boolean }
   ): void {
     const terminalHandle =
       this.handleByPtyId.get(ptyId) ?? this.findHandleForPtyRecord(ptyId) ?? undefined
@@ -140,9 +142,11 @@ export class OrcaRuntimeWithPersistTerminalSurfaceRetirements extends OrcaRuntim
     }
     // Why gated on a deliberate close: a shell the user exited by hand retires the surface too, and
     // on a headless host nothing republishes it, so recording that would refuse its restart-in-place.
+    // Why a reversible stop is excluded: worktree sleep and pane hibernation close the PTY but keep
+    // the pane, and the wake replays exactly these ids.
     // Why before the handle-keyed proofs below: a create replaying these ids must be refused even
     // for a pane no client ever addressed by handle, which publishes no proof.
-    if (exitCause && isDeliberateTerminalExit(exitCause)) {
+    if (exitCause && isDeliberateTerminalExit(exitCause) && opts?.reversibleStop !== true) {
       for (const surface of retiredSurfaces) {
         this.retiredTerminalPanes.record(surface.worktreeId, surface.parentTabId, surface.leafId)
       }

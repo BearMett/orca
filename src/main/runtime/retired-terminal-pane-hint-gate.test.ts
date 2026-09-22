@@ -61,8 +61,9 @@ describe('resolveHintedTerminalPaneIdentity', () => {
     ).toEqual({ tabId: 'tab-1', leafId: LEAF_ID })
   })
 
-  // Otherwise a snapshot that briefly stops listing the pane would refuse the live pane it names.
-  it('forgets the retirement once the pane is adopted again', () => {
+  // Clearing it here would let a spawn that then fails hand the next replay the pane anyway; only
+  // registerPty, which proves a PTY bound to it, may forget a retirement.
+  it('leaves the ledger untouched when it adopts a retired pane', () => {
     const retiredPanes = ledgerWithRetiredPane()
 
     resolve({
@@ -72,11 +73,7 @@ describe('resolveHintedTerminalPaneIdentity', () => {
       isSurfacePublished: () => true
     })
 
-    expect(retiredPanes.has(WORKTREE_ID, 'tab-1', LEAF_ID)).toBe(false)
-    expect(resolve({ hintedTabId: 'tab-1', hintedLeafId: LEAF_ID, retiredPanes })).toEqual({
-      tabId: 'tab-1',
-      leafId: LEAF_ID
-    })
+    expect(retiredPanes.has(WORKTREE_ID, 'tab-1', LEAF_ID)).toBe(true)
   })
 
   it('adopts a hint the host holds no retirement for', () => {

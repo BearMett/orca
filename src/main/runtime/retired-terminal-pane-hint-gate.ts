@@ -17,6 +17,9 @@ export const RETIRED_TERMINAL_PANE_HINT_ERROR = 'tab_not_found'
  * under a tab the user kept open, and that pane must still restart in place once the host
  * republishes it; absence alone cannot tell a retired pane from a client-minted id the host has
  * never seen, which is the normal shape of a paired client's first create.
+ *
+ * Reads the ledger without clearing it: only a PTY that actually bound to the pane may do that, and
+ * a spawn between here and there can still fail.
  */
 export function resolveHintedTerminalPaneIdentity(
   hint: { tabId?: string; leafId?: string },
@@ -42,7 +45,5 @@ export function resolveHintedTerminalPaneIdentity(
   ) {
     throw new Error(RETIRED_TERMINAL_PANE_HINT_ERROR)
   }
-  // Adopting settles the pane's retirement, so a later transient absence cannot refuse it again.
-  host.retiredPanes.forget(host.worktreeId, hintedTabId, hintedLeafId)
   return { tabId: hintedTabId, leafId: hintedLeafId }
 }

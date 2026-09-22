@@ -2408,6 +2408,8 @@ export function createRemoteRuntimePtyTransport(
         if (!destroyed && lifecycleEpoch === connectLifecycleEpoch) {
           connecting = false
           const message = runtimeTerminalErrorMessage(error)
+          // Load-bearing order: a host refusal settles quietly, so it is classified ahead of the
+          // generic gone and retry branches below, which would surface or replay it instead.
           if (isMissingHostSessionSurfaceError(error)) {
             // The host refusing to create under this pane's ids is its own evidence the surface is
             // gone, so settle rather than surface it. Not folded into isRemoteTerminalGoneMessage:

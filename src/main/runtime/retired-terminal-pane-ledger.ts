@@ -24,6 +24,7 @@ export class RetiredTerminalPaneLedger {
     return `${worktreeId}\0${tabId}\0${leafId}`
   }
 
+  /** Records that this pane was retired by a close the user will not undo. */
   record(worktreeId: string, tabId: string, leafId: string): void {
     const key = RetiredTerminalPaneLedger.key(worktreeId, tabId, leafId)
     this.retiredKeys.delete(key)
@@ -37,15 +38,19 @@ export class RetiredTerminalPaneLedger {
     }
   }
 
+  /** Whether a create replaying this pane's ids must be refused. */
   has(worktreeId: string, tabId: string, leafId: string): boolean {
     return this.retiredKeys.has(RetiredTerminalPaneLedger.key(worktreeId, tabId, leafId))
   }
 
-  /** Called once a create adopts the pane again, so a later transient absence cannot refuse it. */
+  /** Called once a PTY is bound to the pane again — a live pane may never be refused. Not at the
+   *  create's gate: a spawn that then fails would leave the retirement gone and the next replay
+   *  adopted. */
   forget(worktreeId: string, tabId: string, leafId: string): void {
     this.retiredKeys.delete(RetiredTerminalPaneLedger.key(worktreeId, tabId, leafId))
   }
 
+  /** How many panes are currently refusable; the eviction cap is enforced against this. */
   get size(): number {
     return this.retiredKeys.size
   }

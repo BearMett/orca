@@ -6,6 +6,11 @@ import {
   TEST_WORKTREE_ID,
   store
 } from '../orca-runtime-test-fixtures.spec'
+import { getDefaultWorkspaceSession } from '../../../shared/constants'
+
+type RuntimeStoreWithOptionalWorkspaceSession = typeof store & {
+  getWorkspaceSession?: () => ReturnType<typeof getDefaultWorkspaceSession>
+}
 
 // #21341: a paired client that wakes replays terminal.create with the original tabId/leafId of every
 // mirrored pane whose host PTY is gone. The host used to adopt that hint on id format alone and
@@ -24,6 +29,29 @@ function createRuntimeWithSpawn(): {
     getForegroundProcess: async () => null
   })
   return { runtime, spawn }
+}
+
+/** A host whose store can read a workspace session but not write one, so a retirement is recorded
+ *  while the surface it names stays published. */
+function createRuntimeWithUnacceptedRetirement(): {
+  runtime: InstanceType<typeof OrcaRuntimeService>
+  spawn: ReturnType<typeof vi.fn>
+  runtimeStore: RuntimeStoreWithOptionalWorkspaceSession
+} {
+  let ptyCount = 0
+  const spawn = vi.fn(async () => ({ id: `pty-unaccepted-retirement-${(ptyCount += 1)}` }))
+  const runtimeStore: RuntimeStoreWithOptionalWorkspaceSession = {
+    ...store,
+    getWorkspaceSession: () => getDefaultWorkspaceSession()
+  }
+  const runtime = new OrcaRuntimeService(runtimeStore)
+  runtime.setPtyController({
+    spawn,
+    write: () => true,
+    kill: () => true,
+    getForegroundProcess: async () => null
+  })
+  return { runtime, spawn, runtimeStore }
 }
 
 describe('terminal.create refuses a pane identity the host already retired', () => {
@@ -129,6 +157,111 @@ describe('terminal.create refuses a pane identity the host already retired', () 
 
     expect(restarted.tabId).toBe('exited-shell-tab')
     expect(spawn).toHaveBeenCalledTimes(2)
+  })
+
+  // Worktree sleep and pane hibernation also stop the PTY on purpose, but the pane is meant to come
+  // back and the wake replays exactly these ids — refusing it would delete the terminal.
+  it('still adopts the hinted id after a reversible stop', async () => {
+    const { runtime, spawn } = createRuntimeWithSpawn()
+    const created = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'slept-pane-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+
+    runtime.markPtyStopRequested(created.ptyId!, { reversible: true })
+    runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
+
+    const woken = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'slept-pane-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+
+    expect(woken.tabId).toBe('slept-pane-tab')
+    expect(spawn).toHaveBeenCalledTimes(2)
+  })
+
+  // The caller that gives the pane up for good is the one to believe, whatever asked first.
+  it('rejects the hinted id when an irreversible stop follows a reversible one', async () => {
+    const { runtime } = createRuntimeWithSpawn()
+    const created = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'slept-then-closed-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+
+    runtime.markPtyStopRequested(created.ptyId!, { reversible: true })
+    runtime.markPtyStopRequested(created.ptyId!)
+    runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
+
+    await expect(
+      runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+        tabId: 'slept-then-closed-tab',
+        leafId: HEADLESS_LEAF_ID
+      })
+    ).rejects.toThrow('tab_not_found')
+  })
+
+  // The gate adopts a retired pane the host still publishes, and the spawn after it can fail. A
+  // retirement cleared at the gate would then be gone with nothing bound to the pane, and the next
+  // replay of the same hint adopted. Persistence that cannot accept the retirement is what keeps
+  // the surface published here.
+  it('keeps refusing the hint when the create fails before a PTY binds to the pane', async () => {
+    const { runtime, spawn, runtimeStore } = createRuntimeWithUnacceptedRetirement()
+    const created = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'unbound-spawn-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    runtime.markPtyStopRequested(created.ptyId!)
+    runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
+
+    spawn.mockRejectedValueOnce(new Error('spawn_failed'))
+    await expect(
+      runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+        tabId: 'unbound-spawn-tab',
+        leafId: HEADLESS_LEAF_ID
+      })
+    ).rejects.toThrow('spawn_failed')
+
+    // Dropping the session reader lets the retirement through, so the host stops publishing the pane.
+    delete runtimeStore.getWorkspaceSession
+    runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
+
+    await expect(
+      runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+        tabId: 'unbound-spawn-tab',
+        leafId: HEADLESS_LEAF_ID
+      })
+    ).rejects.toThrow('tab_not_found')
+  })
+
+  // The create's hint gate deliberately leaves the record alone: only a PTY that actually bound to
+  // the pane proves it is live again, and the spawn between the two can still fail.
+  it('forgets the retirement once a PTY binds to the pane again', async () => {
+    const { runtime } = createRuntimeWithSpawn()
+    const created = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'rebound-pane-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    runtime.markPtyStopRequested(created.ptyId!)
+    runtime.onPtyExit(created.ptyId!, 0, undefined, { hostExitConfirmed: true })
+
+    await expect(
+      runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+        tabId: 'rebound-pane-tab',
+        leafId: HEADLESS_LEAF_ID
+      })
+    ).rejects.toThrow('tab_not_found')
+
+    runtime.registerPty('pty-rebound-pane', TEST_WORKTREE_ID, null, {
+      tabId: 'rebound-pane-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+
+    const adopted = await runtime.createTerminal(`id:${TEST_WORKTREE_ID}`, {
+      tabId: 'rebound-pane-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+
+    expect(adopted.tabId).toBe('rebound-pane-tab')
   })
 
   it('still adopts a hinted id the host never retired', async () => {
