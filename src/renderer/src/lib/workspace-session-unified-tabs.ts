@@ -88,7 +88,15 @@ export function buildPersistedUnifiedTabSessionData(
     }
 
     const groupIds = new Set(groups.map((group) => group.id))
-    const persistedTabs = tabs.filter((tab) => groupIds.has(tab.groupId))
+    // Why dedupe: repeated tab ids have reached disk, and each copy re-hydrates as its own tab.
+    const seenTabIds = new Set<string>()
+    const persistedTabs = tabs.filter((tab) => {
+      if (!groupIds.has(tab.groupId) || seenTabIds.has(tab.id)) {
+        return false
+      }
+      seenTabIds.add(tab.id)
+      return true
+    })
     if (persistedTabs.length === 0) {
       continue
     }
