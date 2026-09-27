@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
+import { parseWorkspaceSessionSalvaging } from '../../../../shared/workspace-session-salvage'
 import { buildEditorSessionData } from '../../lib/workspace-session'
 import { createTestStore, makeWorktree } from '../../store/slices/store-test-helpers'
 import { createStoreSessionMockApi } from '../../store/slices/store-session-test-harness'
@@ -40,7 +41,7 @@ it('does not republish a mirrored editor after persistence and hydration', () =>
     worktreesByRepo: { repo: [makeWorktree({ id: WT, repoId: 'repo', path: '/worktree' })] },
     activeWorktreeId: WT
   })
-  restored.getState().hydrateEditorSession({
+  const loaded = parseWorkspaceSessionSalvaging({
     activeRepoId: 'repo',
     activeWorktreeId: WT,
     activeTabId: null,
@@ -48,6 +49,15 @@ it('does not republish a mirrored editor after persistence and hydration', () =>
     terminalLayoutsByTabId: {},
     ...persisted
   })
+  if (!loaded.ok) {
+    throw new Error(loaded.error)
+  }
+  expect(loaded.droppedCount).toBe(0)
+  expect(loaded.value.openFilesByWorktree?.[WT]?.[0]).toHaveProperty(
+    'mirroredFromRuntimeSession',
+    true
+  )
+  restored.getState().hydrateEditorSession(loaded.value)
 
   expect(restored.getState().openFiles).toHaveLength(1)
   expect(restored.getState().openFiles[0]?.id).not.toBe('/repo/app.ts')
