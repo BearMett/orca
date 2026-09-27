@@ -3,6 +3,8 @@ import { makeState as makePublicationState } from '../sync-runtime-graph-test-ha
 import { applyWebSessionTabsSnapshot } from '../web-session-tabs-sync'
 import {
   ENV,
+  HOST_SURFACE_ID,
+  LEAF_ID,
   NOW,
   WT,
   makeSnapshot,
@@ -39,7 +41,7 @@ describe('mirrored editor tab republication', () => {
     isActive: true
   }
 
-  it('does not republish a file mirrored from a host snapshot or its ghost workspace', () => {
+  it('does not republish a file mirrored from a host snapshot and caches the empty snapshot', () => {
     const clientState = mirrorHostTab(fileTab)
     expect(clientState.openFiles).toMatchObject([
       { worktreeId: WT, runtimeEnvironmentId: ENV, mirroredFromRuntimeSession: true }
@@ -47,8 +49,9 @@ describe('mirrored editor tab republication', () => {
     expect(clientState.unifiedTabsByWorktree[WT]).toMatchObject([
       { id: 'host-file-tab', contentType: 'editor' }
     ])
-    expect(buildMobileSessionTabSnapshots(clientState, false)).toEqual([])
-    expect(buildMobileSessionTabSnapshots(clientState, false)).toEqual([])
+    const snapshots = buildMobileSessionTabSnapshots(clientState, false)
+    expect(snapshots).toMatchObject([{ worktree: WT, tabs: [] }])
+    expect(buildMobileSessionTabSnapshots(clientState, false)[0]).toBe(snapshots[0])
   })
 
   it.each(['edit', 'markdown-preview'] as const)(
@@ -65,7 +68,9 @@ describe('mirrored editor tab republication', () => {
         documentVersion: 'file:/repo/app.ts'
       })
       expect(clientState.openFiles[0]?.mirroredFromRuntimeSession).toBe(true)
-      expect(buildMobileSessionTabSnapshots(clientState, false)).toEqual([])
+      expect(buildMobileSessionTabSnapshots(clientState, false)).toMatchObject([
+        { worktree: WT, tabs: [] }
+      ])
     }
   )
 
@@ -94,7 +99,9 @@ describe('mirrored editor tab republication', () => {
     expect(snapshots[0]?.tabGroups?.flatMap((group) => group.tabOrder)).not.toContain(
       'host-file-tab'
     )
-    expect(buildMobileSessionTabSnapshots(mirroredState, false)).toEqual([])
+    expect(buildMobileSessionTabSnapshots(mirroredState, false)).toMatchObject([
+      { worktree: WT, tabs: [] }
+    ])
     expect(buildMobileSessionTabSnapshots(clientState, false)[0]?.snapshotVersion).toBeGreaterThan(
       snapshots[0]!.snapshotVersion
     )
@@ -107,7 +114,7 @@ describe('mirrored editor tab republication', () => {
         makePublicationState({ openFiles: clientState.openFiles }),
         false
       )
-    ).toEqual([])
+    ).toMatchObject([{ worktree: WT, tabs: [] }])
   })
 
   it('resyncs when only the mirror ownership flag changes', () => {
@@ -125,6 +132,43 @@ describe('mirrored editor tab republication', () => {
     expect(buildMobileSessionTabSnapshots(ownedState, false)[0]?.tabs).toMatchObject([
       { type: 'file', id: 'host-file-tab' }
     ])
-    expect(buildMobileSessionTabSnapshots(mirroredState, false)).toEqual([])
+    expect(buildMobileSessionTabSnapshots(mirroredState, false)).toMatchObject([
+      { worktree: WT, tabs: [] }
+    ])
+  })
+
+  it('keeps workspace membership when a mirrored terminal remains after the file closes', () => {
+    const terminal = {
+      type: 'terminal' as const,
+      id: HOST_SURFACE_ID,
+      parentTabId: 'host-tab-1',
+      leafId: LEAF_ID,
+      title: 'host shell',
+      isActive: false,
+      status: 'ready' as const,
+      terminal: 'terminal-1'
+    }
+    const state = makeState()
+    const withFile = {
+      ...state,
+      ...applyWebSessionTabsSnapshot(state, makeSnapshot([terminal, fileTab]), ENV, NOW)
+    }
+    const before = buildMobileSessionTabSnapshots(makePublicationState(withFile), false)
+    const withoutFile = {
+      ...withFile,
+      ...applyWebSessionTabsSnapshot(
+        withFile,
+        makeSnapshot([terminal], { snapshotVersion: 2 }),
+        ENV,
+        NOW + 1
+      )
+    }
+    expect(withoutFile.openFiles).toEqual([])
+    expect(withoutFile.tabsByWorktree[WT]).toHaveLength(1)
+    const afterState = makePublicationState(withoutFile)
+    const after = buildMobileSessionTabSnapshots(afterState, false)
+    expect(before).toMatchObject([{ worktree: WT, tabs: [] }])
+    expect(after).toMatchObject([{ worktree: WT, tabs: [] }])
+    expect(buildMobileSessionTabSnapshots(afterState, false)[0]).toBe(after[0])
   })
 })
