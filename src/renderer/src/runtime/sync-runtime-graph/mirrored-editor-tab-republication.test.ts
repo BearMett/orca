@@ -171,4 +171,70 @@ describe('mirrored editor tab republication', () => {
     expect(after).toMatchObject([{ worktree: WT, tabs: [] }])
     expect(buildMobileSessionTabSnapshots(afterState, false)[0]).toBe(after[0])
   })
+
+  it('characterizes first-wins publication when an old peer echoes a locally open file', () => {
+    const localFile = {
+      id: '/repo/app.ts',
+      filePath: '/repo/app.ts',
+      relativePath: 'app.ts',
+      worktreeId: WT,
+      language: 'typescript',
+      mode: 'edit' as const,
+      isDirty: false
+    }
+    const state = makeState({
+      openFiles: [localFile],
+      unifiedTabsByWorktree: {
+        [WT]: [
+          {
+            id: 'a-own-tab',
+            entityId: localFile.id,
+            groupId: 'local-group',
+            worktreeId: WT,
+            contentType: 'editor',
+            label: 'app.ts',
+            customLabel: null,
+            color: null,
+            sortOrder: 0,
+            createdAt: NOW,
+            isPreview: false,
+            isPinned: false
+          }
+        ]
+      }
+    })
+    const applied = {
+      ...state,
+      ...applyWebSessionTabsSnapshot(
+        state,
+        makeSnapshot([{ ...fileTab, id: 'peer-file-tab' }]),
+        ENV,
+        NOW
+      )
+    }
+    expect(applied.openFiles).toHaveLength(2)
+    expect(applied.openFiles[0]).toBe(localFile)
+    expect(applied.openFiles[1]).toMatchObject({
+      id: localFile.id,
+      runtimeEnvironmentId: ENV,
+      mirroredFromRuntimeSession: true
+    })
+    expect(applied.unifiedTabsByWorktree[WT]).toMatchObject([
+      { id: 'peer-file-tab', entityId: localFile.id }
+    ])
+    expect(
+      buildMobileSessionTabSnapshots(makePublicationState(applied), false)[0]?.tabs
+    ).toMatchObject([{ id: 'peer-file-tab', type: 'file', filePath: localFile.filePath }])
+    const closed = {
+      ...applied,
+      ...applyWebSessionTabsSnapshot(
+        applied,
+        makeSnapshot([], { snapshotVersion: 2 }),
+        ENV,
+        NOW + 1
+      )
+    }
+    expect(closed.openFiles).toEqual([localFile])
+    expect(closed.unifiedTabsByWorktree[WT]).toBeUndefined()
+  })
 })
