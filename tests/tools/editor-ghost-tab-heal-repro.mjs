@@ -5,17 +5,22 @@
  * A store written before the editor write-path dedupe can hold several OpenFile records for one
  * (worktree, path), and several editor tabs pointing at them. Closing such a tab leaves a sibling
  * behind, and the tab comes back on Ctrl+Tab or at the next restart. Hydration now heals those
- * records once. This tool proves that on a real store instead of a fixture: it copies an
- * orca-data.json into an isolated user-data dir, launches the built app hidden, and records what
- * the heal did, what closing the tabs did, and whether anything came back.
+ * records once. This tool proves that on a real store instead of a fixture: it loads a profile,
+ * seeds it as an orca-data.json into an isolated user-data dir, launches the built app hidden, and
+ * records what the heal did, what closing the tabs did, and whether anything came back.
+ *
+ * A migrated profile keeps its state in profile-state.db; its orca-data.json is only refreshed at
+ * clean shutdown, so while the app runs it is stale. When both exist the database wins.
  *
  * Build first, then run:
  *   npx electron-vite build --mode e2e
- *   ORCA_BACKGROUND_LAUNCH=1 node tests/tools/editor-ghost-tab-heal-repro.mjs --data <copy-of-orca-data.json>
+ *   ORCA_BACKGROUND_LAUNCH=1 node tests/tools/editor-ghost-tab-heal-repro.mjs --data <profile-dir>
  *
  * Options:
- *   --data <file>      orca-data.json to replay. Defaults to the `local-default` profile under the
- *                      platform's Orca userData directory.
+ *   --data <path>      Profile directory (profile-state.db and/or orca-data.json) or a JSON file
+ *                      (an orca-data.json or an exported profile). Defaults to the
+ *                      `local-default` profile dir under the platform's Orca userData directory.
+ *                      Quit Orca first, or pass an export: a live database can be mid-checkpoint.
  *   --worktree <key>   Workspace key to inspect. Default: the auto-detected worktree with the most
  *                      affected paths.
  *   --path <file>      Absolute file path to track; repeatable. Default: every affected path the
@@ -23,13 +28,13 @@
  *   --presses <n>      tab.previousRecent presses after closing (default 5).
  *   --keep             Keep the temporary run directory (it is kept on failure regardless).
  *
- * The source orca-data.json is only ever READ, and the copy the app launches from is sanitized
- * first. Every write goes to a fresh mkdtemp run directory, so the developer's profile cannot be
- * touched. Three things leave the copy: persisted terminal tabs lose `launchAgent`, so a tab whose
- * PTY is gone cannot relaunch an agent CLI; persisted editor rows lose `dirtyDraftContent` and
- * `lastKnownDiskSignature`; and `editorAutoSave` is forced off. The last two matter because the
- * copied rows keep ABSOLUTE file paths — a restored dirty draft would otherwise be autosaved
- * straight into the developer's real file. This tool investigates tab identity, not drafts.
+ * The source profile is only ever READ (a database is copied before it is opened), and the copy
+ * the app launches from is sanitized first. Every write goes to a fresh mkdtemp run directory, so
+ * the developer's profile cannot be touched. Three things leave the copy: persisted terminal tabs
+ * lose `launchAgent`, so a tab whose PTY is gone cannot relaunch an agent CLI; persisted editor
+ * rows lose `dirtyDraftContent` and `lastKnownDiskSignature`; and `editorAutoSave` is forced off.
+ * The last two matter because the copied rows keep ABSOLUTE file paths — a restored dirty draft
+ * would otherwise be autosaved straight into the developer's real file. This tool investigates tab identity, not drafts.
  *
  * Stripping the drafts changes what the heal does with duplicates: a drafted record would otherwise
  * win `pickSurvivor`, and the divergent-draft branch that keeps two rows apart never runs here. The
@@ -54,6 +59,7 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { loadProfileState } from './editor-ghost-tab-profile-source.mjs'
 import {
   EDITOR_ENTITY_PATH_INIT_SCRIPT,
   editorEntityPath,
@@ -107,8 +113,8 @@ function defaultUserDataPath(platform = process.platform, homeDir = os.homedir()
   return path.join(process.env.XDG_CONFIG_HOME || path.join(homeDir, '.config'), 'orca')
 }
 
-function defaultDataFile() {
-  return path.join(defaultUserDataPath(), 'profiles', PROFILE_ID, 'orca-data.json')
+function defaultProfileDir() {
+  return path.join(defaultUserDataPath(), 'profiles', PROFILE_ID)
 }
 
 /** Runs in the renderer against the dev-exposed store; returns only the fields under test. */
@@ -259,7 +265,7 @@ function makeUserDataDir(runRoot, name, data) {
     path.join(userDataDir, 'orca-profile-index.json'),
     `${JSON.stringify(PROFILE_INDEX, null, 2)}\n`
   )
-  return { userDataDir, dataFile: path.join(profileDir, 'orca-data.json') }
+  return { userDataDir, profileDir }
 }
 
 /** A restored tab whose PTY died must not relaunch an agent CLI in someone's checkout. */
@@ -396,10 +402,15 @@ async function launchHidden(userDataDir, healLines) {
   return { app, page }
 }
 
-const dataFile = argValue('data', defaultDataFile())
+const dataArg = argValue('data', defaultProfileDir())
 const pressCount = Number(argValue('presses', '5'))
 const keepRunRoot = process.argv.includes('--keep')
-const source = JSON.parse(readFileSync(dataFile, 'utf8'))
+const loaded = loadProfileState(dataArg)
+for (const warning of loaded.warnings) {
+  console.error(`[heal-repro] ${warning}`)
+}
+const dataFile = loaded.sourceFile
+const source = loaded.state
 const affectedByWorktree = scanWorkspaceSession(source.workspaceSession)
 const requestedWorktree = argValue('worktree')
 const requestedPaths = argValues('path')
@@ -435,6 +446,7 @@ const writeEvidence = (name, value) =>
 const readArg = { worktreeId, paths: trackedPaths }
 const report = {
   dataFile,
+  sourceStorage: loaded.classification,
   worktreeId,
   trackedPaths,
   runRoot,
@@ -496,7 +508,8 @@ try {
 
   await first.page.evaluate(() => window.api.session.flush())
   await first.page.waitForTimeout(1_500)
-  const flushed = JSON.parse(readFileSync(pass1.dataFile, 'utf8'))
+  // Why the loader: a SQLite-capable build flushes to profile-state.db, not the seeded JSON.
+  const flushed = loadProfileState(pass1.profileDir).state
   report.persistedAfterFlush = persistedShape(flushed, worktreeId, trackedPaths)
   writeEvidence('5-persisted-after-flush.json', report.persistedAfterFlush)
 
@@ -514,7 +527,7 @@ try {
   await second.page.evaluate(() => window.api.session.flush())
   await second.page.waitForTimeout(1_000)
   report.persistedAfterRestart = persistedShape(
-    JSON.parse(readFileSync(pass2.dataFile, 'utf8')),
+    loadProfileState(pass2.profileDir).state,
     worktreeId,
     trackedPaths
   )
@@ -558,7 +571,7 @@ try {
   const healed = report.baseline.openFileCountByPath
   const afterFlush = report.persistedAfterFlush?.openFileCountByPath ?? {}
   console.error('[heal-repro] summary')
-  console.error(`  data              ${dataFile}`)
+  console.error(`  data              ${dataFile} (${loaded.classification})`)
   console.error(`  worktree          ${worktreeId}`)
   console.error(`  launchAgents      stripped ${report.strippedLaunchAgents}`)
   console.error(`  heal line         ${report.healLines?.[0] ?? '(none)'}`)

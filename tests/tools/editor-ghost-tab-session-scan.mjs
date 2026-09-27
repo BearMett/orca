@@ -46,9 +46,36 @@ function editorTabsByEntity(session, worktreeId) {
 }
 
 /**
+ * The owner an editor tab's id encodes: a bare path is unowned, `editor:<wt>:<runtime>:<path>`
+ * names its runtime (`local` meaning none). `undefined` for any other id shape, which says nothing.
+ */
+export function editorEntityOwner(entityId, filePath) {
+  const id = String(entityId)
+  if (id === filePath) {
+    return null
+  }
+  const parts = id.split(':')
+  if (parts[0] !== 'editor' || parts.length !== 4) {
+    return undefined
+  }
+  try {
+    const runtime = decodeURIComponent(parts[2])
+    return runtime === 'local' ? null : runtime
+  } catch {
+    return undefined
+  }
+}
+
+const sameOwnerSet = (a, b) => a.size === b.size && [...a].every((owner) => b.has(owner))
+
+/**
  * Affected (worktree, path) pairs: more than one OpenFile record, owners that disagree, an editor
  * tab repeated inside one tab group, or a tab with no record left — the shapes that resurrect a
  * closed tab. A tab without a record is the ghost itself, so it must not need a record to be seen.
+ *
+ * Two more catch owners leaked from UI focus. Such a record keeps the bare-path id its first opener
+ * gave it, so its tab id disagrees with its owner; and it disagrees with the worktree's other
+ * records. The session carries no worktree owner, so the second rule cannot say which side leaked.
  */
 export function scanWorkspaceSession(session) {
   const affectedByWorktree = new Map()
@@ -74,16 +101,48 @@ export function scanWorkspaceSession(session) {
       }
       const repeatedInGroup = [...tabsPerGroup.values()].filter((count) => count > 1).length
       const distinctOwners = [...new Set(owners)]
+      const tabIdOwners = new Set(
+        tabs
+          .filter((tab) => tab.contentType === 'editor')
+          .map((tab) => editorEntityOwner(tab.entityId, filePath))
+          .filter((owner) => owner !== undefined)
+      )
+      const reasons = []
+      if (owners.length > 1) {
+        reasons.push('duplicate-records')
+      }
+      if (distinctOwners.length > 1) {
+        reasons.push('mixed-owners')
+      }
+      if (repeatedInGroup > 0) {
+        reasons.push('repeated-in-group')
+      }
+      if (owners.length === 0 && tabs.length > 0) {
+        reasons.push('tab-without-record')
+      }
       if (
-        owners.length > 1 ||
-        distinctOwners.length > 1 ||
-        repeatedInGroup > 0 ||
-        (owners.length === 0 && tabs.length > 0)
+        owners.length > 0 &&
+        tabIdOwners.size > 0 &&
+        !sameOwnerSet(tabIdOwners, new Set(distinctOwners))
       ) {
+        reasons.push('tab-id-owner-mismatch')
+      }
+      if (
+        distinctOwners.some((owner) => owner !== null) &&
+        [...ownersByPath].some(
+          ([otherPath, otherOwners]) =>
+            otherPath !== filePath && otherOwners.some((owner) => !distinctOwners.includes(owner))
+        )
+      ) {
+        reasons.push('owner-differs-in-worktree')
+      }
+      if (reasons.length > 0) {
         affected.push({
           filePath,
+          reasons,
           recordCount: owners.length,
           owners: distinctOwners,
+          tabIdOwners: [...tabIdOwners],
           editorTabCount: tabs.length,
           repeatedInGroup
         })
@@ -102,9 +161,11 @@ export function printScanTable(affectedByWorktree) {
     console.error(`  ${worktreeId}`)
     for (const entry of affected) {
       const owners = entry.owners.map((owner) => owner ?? 'null').join(',')
+      const tabIdOwners = entry.tabIdOwners.map((owner) => owner ?? 'null').join(',')
       console.error(
-        `    records=${entry.recordCount} owners=[${owners}] editorTabs=${entry.editorTabCount}` +
-          ` repeatedInGroup=${entry.repeatedInGroup}  ${entry.filePath}`
+        `    records=${entry.recordCount} owners=[${owners}] tabIdOwners=[${tabIdOwners}]` +
+          ` editorTabs=${entry.editorTabCount} repeatedInGroup=${entry.repeatedInGroup}` +
+          ` reasons=${entry.reasons.join(',')}  ${entry.filePath}`
       )
     }
   }
