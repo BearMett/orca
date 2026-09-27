@@ -186,17 +186,6 @@ export function buildMobileSessionTabSnapshots(
       }
     }
 
-    // Mirrored tab/group keys also enter worktreeIds; they must not publish a ghost workspace.
-    if (
-      tabs.length === 0 &&
-      inputs.openFileIds.some(
-        (fileId) => openFilesForWorktree?.get(fileId)?.mirroredFromRuntimeSession === true
-      )
-    ) {
-      graphState.mobileSessionSnapshotCacheByWorktree.delete(worktreeId)
-      continue
-    }
-
     const active = tabs.find((tab) => tab.isActive) ?? null
     const tabGroups = appendFallbackEditorTabsToGroups(
       groupProjection.tabGroups,
