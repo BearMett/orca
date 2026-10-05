@@ -98,4 +98,56 @@ describe('buildPersistedUnifiedTabSessionData', () => {
       ['tab-1', 'group-2', 'chosen', true]
     ])
   })
+
+  it.each([
+    editorTab({ contentType: 'diff', entityId: '/x/disappeared.ts', sortOrder: -1 }),
+    editorTab({ entityId: 'html-preview::old-document', sortOrder: -1 }),
+    editorTab({ contentType: 'terminal', entityId: 'runtime::old-terminal', sortOrder: -1 })
+  ])('restores the live editor when its duplicate $contentType row cannot restore', (discarded) => {
+    const editor = editorTab()
+    const snapshot = {
+      unifiedTabsByWorktree: { [WORKTREE_ID]: [discarded, editor] },
+      groupsByWorktree: {
+        [WORKTREE_ID]: [
+          { id: 'group-1', worktreeId: WORKTREE_ID, activeTabId: 'tab-1', tabOrder: ['tab-1'] }
+        ]
+      },
+      layoutByWorktree: {},
+      activeGroupIdByWorktree: {},
+      openFiles: [
+        {
+          id: editor.entityId,
+          filePath: editor.entityId,
+          relativePath: 'README.md',
+          worktreeId: WORKTREE_ID,
+          language: 'markdown',
+          mode: 'edit' as const,
+          isDirty: true
+        }
+      ]
+    }
+    const persisted = buildPersistedUnifiedTabSessionData(snapshot)
+    const store = createTestStore()
+    store.setState({
+      repos: [{ id: 'repo-1', path: '/x', displayName: 'Repo', badgeColor: '#000', addedAt: 0 }],
+      worktreesByRepo: {
+        'repo-1': [makeWorktree({ id: WORKTREE_ID, repoId: 'repo-1', path: '/x' })]
+      }
+    })
+    const session: WorkspaceSessionState = {
+      activeRepoId: 'repo-1',
+      activeWorktreeId: null,
+      activeTabId: null,
+      tabsByWorktree: {},
+      terminalLayoutsByTabId: {},
+      openFilesByWorktree: {
+        [WORKTREE_ID]: [{ ...snapshot.openFiles[0], dirtyDraftContent: 'retained draft' }]
+      },
+      ...persisted
+    }
+    store.getState().hydrateTabsSession(session)
+    store.getState().hydrateEditorSession(session)
+    expect(store.getState().unifiedTabsByWorktree[WORKTREE_ID]).toEqual([editor])
+    expect(store.getState().editorDrafts[editor.entityId]).toBe('retained draft')
+  })
 })
