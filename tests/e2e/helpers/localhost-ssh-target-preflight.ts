@@ -2,25 +2,13 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
-type LocalhostSshTarget = {
-  label: string
-  host: string
-  port: number
-  username: string
-  configHost?: string
-  identityFile?: string
-}
+import { readLocalhostSshTarget, type LocalhostSshTarget } from './localhost-ssh-target'
 
 // Why: the Electron app runs under an isolated HOME (electron-home-isolation.ts), so its ssh2
 // client never sees the developer's ~/.ssh keys and falls back to keyboard-interactive (which
 // connectSshTestTarget cancels). CI sets ORCA_E2E_SSH_IDENTITY_FILE explicitly; locally, pick the
 // first default OpenSSH identity from the runner's real home so the app authenticates like `ssh`.
-function resolveLocalhostIdentityFile(): string | undefined {
-  const explicit = process.env.ORCA_E2E_SSH_IDENTITY_FILE?.trim()
-  if (explicit) {
-    return explicit
-  }
+function resolveDefaultIdentityFile(): string | undefined {
   for (const name of ['id_ed25519', 'id_rsa', 'id_ecdsa']) {
     const candidate = path.join(os.homedir(), '.ssh', name)
     if (existsSync(candidate)) {
@@ -30,30 +18,13 @@ function resolveLocalhostIdentityFile(): string | undefined {
   return undefined
 }
 
-/** Copied from tests/e2e/ssh-localhost.spec.ts (not exported there), plus the identity fallback. */
-function readLocalhostSshTarget(): LocalhostSshTarget {
-  const configHost = process.env.ORCA_E2E_SSH_CONFIG_HOST?.trim()
-  const host = process.env.ORCA_E2E_SSH_HOST?.trim() ?? (configHost ? '' : '127.0.0.1')
-  const identityFile = configHost
-    ? process.env.ORCA_E2E_SSH_IDENTITY_FILE?.trim()
-    : resolveLocalhostIdentityFile()
-  const rawPort = process.env.ORCA_E2E_SSH_PORT
-  const port = Number(rawPort ?? '22')
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`Invalid ORCA_E2E_SSH_PORT: ${rawPort}`)
+function readPreflightSshTarget(): LocalhostSshTarget {
+  const target = readLocalhostSshTarget(`Mirror echo SSH E2E ${Date.now()}`)
+  if (target.configHost || target.identityFile) {
+    return target
   }
-  return {
-    label: `Mirror echo SSH E2E ${Date.now()}`,
-    host,
-    port,
-    username:
-      process.env.ORCA_E2E_SSH_USER ??
-      process.env.USER ??
-      process.env.USERNAME ??
-      os.userInfo().username,
-    ...(configHost ? { configHost } : {}),
-    ...(identityFile ? { identityFile } : {})
-  }
+  const identityFile = resolveDefaultIdentityFile()
+  return identityFile ? { ...target, identityFile } : target
 }
 
 type SshPreflight = { ok: true; target: LocalhostSshTarget } | { ok: false; reason: string }
@@ -79,7 +50,7 @@ export function sshLocalhostPreflight(): SshPreflight {
       reason: `Relay bundle missing at ${relayBundle}; run pnpm run build:relay.`
     }
   }
-  const target = readLocalhostSshTarget()
+  const target = readPreflightSshTarget()
   const destination = target.configHost ?? `${target.username}@${target.host}`
   const args = [
     '-o',
