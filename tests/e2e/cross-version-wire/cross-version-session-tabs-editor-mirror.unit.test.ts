@@ -18,7 +18,7 @@ import {
 /**
  * The session-tabs editor-mirror surface, paired across two builds.
  *
- * PR4 changes one predicate on the publishing side (`isMobilePublishableOpenFile` now
+ * The fix changes one predicate on the publishing side (`isMobilePublishableOpenFile` now
  * refuses a row marked `mirroredFromRuntimeSession`) and lets that marker survive the
  * persisted-session schema. The frame shape is untouched, so the skew that matters is
  * between two pure functions whose signatures did not move:
@@ -41,7 +41,7 @@ const OLD_REF = process.env.ORCA_CROSS_VERSION_BASELINE_REF?.trim() || DEFAULT_P
 const KNOWN_PRE_FIX_COMMITS = new Set([
   // v1.4.204
   '4f7baefc4f5c49181d54046763e083a4628662d8',
-  // PR4 base (069701446b)
+  // Base of the fix (069701446b)
   '069701446bba5ca479281f5867802ca78d3c1060'
 ])
 // Resolved at collection time: `it.skipIf` reads it before any hook runs.
@@ -237,7 +237,18 @@ function applyFrame(
   environmentId: string,
   now: number
 ): WebSessionTabsSyncState {
-  return { ...state, ...build.apply(state, frame, environmentId, now) }
+  return { ...state, ...build.apply(state, toClientFrame(frame), environmentId, now) }
+}
+
+/** Only terminal tabs differ on the wire (the host attaches a handle); these frames carry none. */
+function toClientFrame(frame: RuntimeMobileSessionTabsSnapshot): RuntimeMobileSessionTabsResult {
+  const tabs = frame.tabs.map((tab) => {
+    if (tab.type === 'terminal') {
+      throw new Error(`unexpected terminal tab ${tab.id} in an editor mirror frame`)
+    }
+    return tab
+  })
+  return { ...frame, tabs }
 }
 
 /** Frame content without the per-build epoch/version, which differ by construction. */
@@ -372,7 +383,7 @@ describe('cross-version session-tabs editor mirror', () => {
       JSON.stringify({ hostTabId: openFrame.tabs[0]?.id, rowId: worktreeFiles(oldB1)[0]?.id })
     )
 
-    // Host closes: the worktree stays published with no tabs (PR4 F2 shape).
+    // Host closes: the worktree stays published with no tabs (retained empty snapshot).
     const closedFrame = publishWorktree(stack, hostClosedState())
     expect(closedFrame.tabs).toEqual([])
     expect(closedFrame.snapshotVersion).toBeGreaterThan(openFrame.snapshotVersion)
