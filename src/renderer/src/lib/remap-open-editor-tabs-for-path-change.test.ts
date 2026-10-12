@@ -299,7 +299,7 @@ describe('remapOpenEditorTabsForPathChange', () => {
     }
   )
 
-  it('leaves an ownerless record in place when its workspace has no route', () => {
+  it('refuses to retarget anything when an open copy has no placeable host', () => {
     const file = {
       filePath: '/repo/a.md',
       relativePath: 'a.md',
@@ -314,7 +314,7 @@ describe('remapOpenEditorTabsForPathChange', () => {
       ]
     })
 
-    remapOpenEditorTabsForPathChange({
+    const result = remapOpenEditorTabsForPathChange({
       fromPath: '/repo/a.md',
       toPath: '/repo/b.md',
       worktreePath: '/repo',
@@ -322,7 +322,9 @@ describe('remapOpenEditorTabsForPathChange', () => {
       operationOwner: LOCAL_MOVE
     })
 
-    // Why: no row names the record's host, so a guess could retarget a file the rename never touched.
+    // Why: no row names the record's host; it may be this host's own copy, so the move cannot say
+    // whether it moved. The coordinator refuses before the disk rename on this answer.
+    expect(result).toEqual({ ok: false, reason: 'unresolved' })
     const files = useAppStore.getState().openFiles
     expect(files.find((f) => f.worktreeId === 'wt-uncataloged')).toMatchObject({
       id: 'mover',

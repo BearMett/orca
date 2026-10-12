@@ -318,6 +318,80 @@ describe('executeOpenEditorPathMove', () => {
     }
   )
 
+  it.each([
+    ['no catalog row names the workspace', { repos: [], worktreesByRepo: {} }],
+    [
+      'rival local and SSH rows name the workspace',
+      {
+        repos: [
+          {
+            id: 'repo-1',
+            path: '/repo',
+            displayName: 'Repo',
+            badgeColor: 'gray',
+            addedAt: 0,
+            executionHostId: 'local' as const
+          },
+          {
+            id: 'repo-ssh',
+            path: '/repo',
+            displayName: 'Repo (ssh)',
+            badgeColor: 'gray',
+            addedAt: 0,
+            executionHostId: 'ssh:ssh-x' as const
+          }
+        ],
+        worktreesByRepo: {
+          'repo-1': [
+            makeWorktree({ id: 'wt-1', repoId: 'repo-1', path: '/repo', hostId: 'local' })
+          ],
+          'repo-ssh': [
+            makeWorktree({ id: 'wt-1', repoId: 'repo-ssh', path: '/repo', hostId: 'ssh:ssh-x' })
+          ]
+        }
+      }
+    ]
+  ])(
+    'refuses before the disk rename when a restored copy has no placeable host (%s)',
+    async (_label, rows) => {
+      // A restored record: no provenance, "no runtime transport", in a workspace whose rows cannot place it.
+      useAppStore.setState({
+        ...rows,
+        openFiles: [
+          {
+            id: '/repo/a.md',
+            filePath: '/repo/a.md',
+            relativePath: 'a.md',
+            worktreeId: 'wt-1',
+            language: 'markdown',
+            isDirty: true,
+            mode: 'edit',
+            runtimeEnvironmentId: null
+          }
+        ],
+        editorDrafts: { '/repo/a.md': 'unsaved work' }
+      })
+      vi.mocked(requestEditorSaveQuiesce).mockClear()
+      const before = useAppStore.getState().openFiles.map((f) => ({ ...f }))
+
+      await expect(
+        executeOpenEditorPathMove({
+          context: CONTEXT,
+          fromPath: '/repo/a.md',
+          toPath: '/repo/b.md',
+          worktreeId: 'wt-1',
+          worktreePath: '/repo'
+        })
+      ).rejects.toThrow(/verify which host owns the open copy of a\.md/)
+
+      expect(mocks.renameRuntimePath).not.toHaveBeenCalled()
+      expect(vi.mocked(requestEditorSaveQuiesce)).not.toHaveBeenCalled()
+      expect(useAppStore.getState().openFiles).toEqual(before)
+      expect(useAppStore.getState().editorDrafts['/repo/a.md']).toBe('unsaved work')
+      expect(__activeEditorPathMoveCountForTests()).toBe(0)
+    }
+  )
+
   it('leaves the store untouched and settles the transaction when the rename fails', async () => {
     openDirtyTab()
     const before = useAppStore.getState().openFiles.map((f) => ({ ...f }))

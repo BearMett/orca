@@ -11,4 +11,7 @@ export type OpenFilePathRekey = {
   consumeUntitled?: boolean
 }
 
-export type RekeyOpenFilesResult = { ok: true } | { ok: false; reason: 'collision' | 'stale' }
+/** `unresolved`: an open copy under the path has no placeable host, so the move cannot say whether it moved. */
+export type RekeyOpenFilesResult =
+  | { ok: true }
+  | { ok: false; reason: 'collision' | 'stale' | 'unresolved' }

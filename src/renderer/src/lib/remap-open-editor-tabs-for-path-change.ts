@@ -2,7 +2,7 @@ import { useAppStore } from '@/store'
 import { detectLanguage } from '@/lib/language-detect'
 import { basename } from '@/lib/path'
 import {
-  selectOpenFilesForPathMove,
+  partitionOpenFilesForPathMove,
   type EditorPathMoveOwner
 } from '@/lib/open-editor-path-move-selection'
 import {
@@ -202,7 +202,15 @@ export function remapOpenEditorTabsForPathChange({
   moveOperationId?: string
 }): RekeyOpenFilesResult {
   const state = useAppStore.getState()
-  const filesToMove = selectOpenFilesForPathMove(state, fromPath, operationOwner)
+  const { selected: filesToMove, unresolved } = partitionOpenFilesForPathMove(
+    state,
+    fromPath,
+    operationOwner
+  )
+  // Why: a copy nothing can place may be this host's own; retargeting around it strands its tab.
+  if (unresolved.length > 0) {
+    return { ok: false, reason: 'unresolved' }
+  }
   if (filesToMove.length === 0) {
     return { ok: true }
   }

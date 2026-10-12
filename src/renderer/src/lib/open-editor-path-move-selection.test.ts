@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { OpenFile } from '@/store/slices/editor'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
-import { selectOpenFilesForPathMove } from './open-editor-path-move-selection'
+import {
+  partitionOpenFilesForPathMove,
+  selectOpenFilesForPathMove
+} from './open-editor-path-move-selection'
 import {
   resolveWorktreeOperationRoute,
   type WorktreeOperationRouteState
@@ -103,6 +106,16 @@ describe('selectOpenFilesForPathMove', () => {
 
     expect(selectedIds(state, LOCAL_MOVE)).toEqual([])
     expect(selectedIds(state, ENV_1_MOVE)).toEqual([])
+    expect(
+      partitionOpenFilesForPathMove(state, '/ws/a.ts', LOCAL_MOVE).unresolved.map((f) => f.id)
+    ).toEqual(['unplaced'])
+  })
+
+  it('reports a placed record on another host as excluded, not unresolved', () => {
+    const state = { ...workspaceRows('ssh:ssh-x'), openFiles: [editorFile('ssh-file')] }
+    const result = partitionOpenFilesForPathMove(state, '/ws/a.ts', LOCAL_MOVE)
+    expect(result.selected).toEqual([])
+    expect(result.unresolved).toEqual([])
   })
 
   it('places an ownerless record by its workspace rows, not the Active Server setting', () => {
@@ -157,5 +170,11 @@ describe('selectOpenFilesForPathMove', () => {
     expect(selectedIds(state, LOCAL_MOVE)).toEqual(['floating'])
     expect(selectedIds(state, ENV_1_MOVE)).toEqual([])
     expect(selectedIds(state, SSH_X_MOVE)).toEqual([])
+    // The caller must refuse: either record may be the renaming host's own copy.
+    for (const move of [LOCAL_MOVE, ENV_1_MOVE, SSH_X_MOVE]) {
+      expect(
+        partitionOpenFilesForPathMove(state, '/ws/a.ts', move).unresolved.map((f) => f.id)
+      ).toEqual(['ownerless', 'runtime-less'])
+    }
   })
 })

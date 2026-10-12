@@ -7,7 +7,7 @@ import {
   settleEditorPathMove
 } from '@/components/editor/editor-path-move-inflight'
 import { remapOpenEditorTabsForPathChange } from '@/lib/remap-open-editor-tabs-for-path-change'
-import { selectOpenFilesForPathMove } from '@/lib/open-editor-path-move-selection'
+import { partitionOpenFilesForPathMove } from '@/lib/open-editor-path-move-selection'
 import { verifyLatchedMoveDestinations } from '@/hooks/useEditorExternalWatch'
 import { notifyHostOfMirroredEditorClose } from '@/runtime/close-mirrored-editor-tab'
 import { documentFolderAccess } from '@/lib/local-file-access'
@@ -39,7 +39,19 @@ export async function executeOpenEditorPathMove(args: {
     sshTargetId: context.expectedSshTargetId?.trim() || null
   }
   const moveState = useAppStore.getState()
-  const affected = selectOpenFilesForPathMove(moveState, fromPath, operationOwner)
+  const { selected: affected, unresolved } = partitionOpenFilesForPathMove(
+    moveState,
+    fromPath,
+    operationOwner
+  )
+  // Why: refuse before the disk changes; a rename that skips an unplaceable copy would leave its
+  // tab (and any unsaved text) pointing at a path that no longer exists.
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Couldn't verify which host owns the open copy of ${unresolved[0].relativePath}. ` +
+        'Reopen it after the connection settles, then retry the move.'
+    )
+  }
 
   // Suppress the move ROOT (prefix-matched) per scope, always including the
   // initiating one, so a file opened UNDER a moving dir mid-rename is covered
