@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useAppStore } from '@/store'
+import { makeWorktree } from '@/store/slices/store-test-helpers'
 import { remapOpenEditorTabsForPathChange } from './remap-open-editor-tabs-for-path-change'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 import {
@@ -27,6 +28,22 @@ const LOCAL_MOVE = { runtimeEnvironmentId: null, sshTargetId: null }
 describe('remapOpenEditorTabsForPathChange', () => {
   beforeEach(() => {
     useAppStore.setState(useAppStore.getInitialState(), true)
+    // Why: a record is placed by its workspace rows; `wt-1` is stamped as this machine's.
+    useAppStore.setState({
+      repos: [
+        {
+          id: 'repo-1',
+          path: '/repo',
+          displayName: 'Repo',
+          badgeColor: 'gray',
+          addedAt: 0,
+          executionHostId: 'local'
+        }
+      ],
+      worktreesByRepo: {
+        'repo-1': [makeWorktree({ id: 'wt-1', repoId: 'repo-1', path: '/repo', hostId: 'local' })]
+      }
+    })
   })
 
   it('preserves runtime owners, drafts, dirty state, and markdown preview sources', () => {

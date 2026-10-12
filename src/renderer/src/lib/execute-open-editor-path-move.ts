@@ -39,7 +39,7 @@ export async function executeOpenEditorPathMove(args: {
     sshTargetId: context.expectedSshTargetId?.trim() || null
   }
   const moveState = useAppStore.getState()
-  const affected = selectOpenFilesForPathMove(moveState, fromPath, worktreeId, operationOwner)
+  const affected = selectOpenFilesForPathMove(moveState, fromPath, operationOwner)
 
   // Suppress the move ROOT (prefix-matched) per scope, always including the
   // initiating one, so a file opened UNDER a moving dir mid-rename is covered

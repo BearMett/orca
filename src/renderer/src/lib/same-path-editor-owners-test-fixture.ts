@@ -18,7 +18,23 @@ export const SAME_PATH_OWNER_IDS: Record<SamePathOwner, string> = {
 /** Catalog host of the shared workspace; `runtime` stamps its rows `runtime:env-1`. */
 export type SamePathWorkspaceRoute = 'local' | 'runtime'
 
-/** One workspace holding the same absolute path for three distinct hosts. */
+/** What a local open stamps on its record; the only local evidence inside a runtime-routed workspace. */
+const LOCAL_PROVENANCE: NonNullable<OpenFile['operationProvenance']> = {
+  ownershipProjection: 'explicit',
+  generation: {
+    route: { executionHostId: 'local', runtimeEnvironmentId: null },
+    runtimeConnectionGeneration: null,
+    runtimePairingRevision: undefined,
+    runtimeSshGeneration: null,
+    nestedSshGeneration: null,
+    directSshGeneration: null
+  }
+}
+
+/**
+ * One workspace holding the same absolute path for three distinct hosts. In the local-routed
+ * workspace the rows place the local record; in the runtime-routed one only its provenance does.
+ */
 export function seedSamePathEditorOwners(route: SamePathWorkspaceRoute = 'local'): void {
   const base = {
     filePath: SAME_PATH_FROM,
@@ -29,7 +45,12 @@ export function seedSamePathEditorOwners(route: SamePathWorkspaceRoute = 'local'
     mode: 'edit'
   } as const
   const files: OpenFile[] = [
-    { ...base, id: SAME_PATH_OWNER_IDS.local, runtimeEnvironmentId: null },
+    {
+      ...base,
+      id: SAME_PATH_OWNER_IDS.local,
+      runtimeEnvironmentId: null,
+      ...(route === 'runtime' ? { operationProvenance: LOCAL_PROVENANCE } : {})
+    },
     { ...base, id: SAME_PATH_OWNER_IDS.runtime, runtimeEnvironmentId: 'env-1' },
     {
       ...base,

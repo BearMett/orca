@@ -19,7 +19,6 @@ export type EditorPathMoveOwner = {
 export function selectOpenFilesForPathMove(
   state: Pick<AppState, 'openFiles'> & Parameters<typeof getEditorFileBackingHost>[1],
   fromPath: string,
-  worktreeId: string | undefined,
   owner: EditorPathMoveOwner
 ): OpenFile[] {
   return state.openFiles.filter((file) => {
@@ -30,14 +29,13 @@ export function selectOpenFilesForPathMove(
     // Why: the Active Server setting names no file's host; blanking it keeps the route focus-free.
     const host = getEditorFileBackingHost(file, { ...state, settings: null })
     if (!host.executionHostId) {
-      // Why: floating files live on this machine; a file that says "no runtime" in the workspace a
-      // local rename ran in is that machine's. Any other unplaced file stays put — a guessed host
-      // would retarget a file on a disk the rename never touched.
-      const isLocalMove = owner.runtimeEnvironmentId === null && owner.sshTargetId === null
+      // Why: `runtimeEnvironmentId: null` means "no runtime transport", which an SSH workspace's
+      // files share with local ones; a record no row or provenance places could sit on a disk the
+      // rename never touched, so it stays put. Floating files always live on this machine.
       return (
-        isLocalMove &&
-        (file.worktreeId === FLOATING_TERMINAL_WORKTREE_ID ||
-          (file.worktreeId === worktreeId && file.runtimeEnvironmentId === null))
+        file.worktreeId === FLOATING_TERMINAL_WORKTREE_ID &&
+        owner.runtimeEnvironmentId === null &&
+        owner.sshTargetId === null
       )
     }
     const parsed = parseExecutionHostId(host.executionHostId)

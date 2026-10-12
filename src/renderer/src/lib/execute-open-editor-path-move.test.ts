@@ -13,6 +13,7 @@ vi.mock('@/components/editor/editor-autosave', async (importOriginal) => {
 })
 
 import { useAppStore } from '@/store'
+import { makeWorktree } from '@/store/slices/store-test-helpers'
 import { executeOpenEditorPathMove } from './execute-open-editor-path-move'
 import { __activeEditorPathMoveCountForTests } from '@/components/editor/editor-path-move-inflight'
 import { getDiskBaselineSignature } from '@/components/editor/diff-content-signature'
@@ -59,6 +60,22 @@ function openDirtyTab(): string {
 describe('executeOpenEditorPathMove', () => {
   beforeEach(() => {
     useAppStore.setState(useAppStore.getInitialState(), true)
+    // Why: a record is placed by its workspace rows; `wt-1` is stamped as this machine's.
+    useAppStore.setState({
+      repos: [
+        {
+          id: 'repo-1',
+          path: '/repo',
+          displayName: 'Repo',
+          badgeColor: 'gray',
+          addedAt: 0,
+          executionHostId: 'local'
+        }
+      ],
+      worktreesByRepo: {
+        'repo-1': [makeWorktree({ id: 'wt-1', repoId: 'repo-1', path: '/repo', hostId: 'local' })]
+      }
+    })
     mocks.renameRuntimePath.mockReset().mockResolvedValue(undefined)
   })
 

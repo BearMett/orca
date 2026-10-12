@@ -202,7 +202,7 @@ export function remapOpenEditorTabsForPathChange({
   moveOperationId?: string
 }): RekeyOpenFilesResult {
   const state = useAppStore.getState()
-  const filesToMove = selectOpenFilesForPathMove(state, fromPath, worktreeId, operationOwner)
+  const filesToMove = selectOpenFilesForPathMove(state, fromPath, operationOwner)
   if (filesToMove.length === 0) {
     return { ok: true }
   }
