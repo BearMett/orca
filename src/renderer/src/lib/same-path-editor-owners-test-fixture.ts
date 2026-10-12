@@ -15,8 +15,11 @@ export const SAME_PATH_OWNER_IDS: Record<SamePathOwner, string> = {
   ssh: 'editor-record:ssh-x:a'
 }
 
-/** One local-catalog workspace holding the same absolute path for three distinct hosts. */
-export function seedSamePathEditorOwners(): void {
+/** Catalog host of the shared workspace; `runtime` stamps its rows `runtime:env-1`. */
+export type SamePathWorkspaceRoute = 'local' | 'runtime'
+
+/** One workspace holding the same absolute path for three distinct hosts. */
+export function seedSamePathEditorOwners(route: SamePathWorkspaceRoute = 'local'): void {
   const base = {
     filePath: SAME_PATH_FROM,
     relativePath: 'a.ts',
@@ -35,10 +38,27 @@ export function seedSamePathEditorOwners(): void {
       externalSshTargetId: 'ssh-x'
     }
   ].map((file) => ({ ...file, lastKnownDiskSignature: `sig-${file.id}` }))
+  const hostId = route === 'runtime' ? 'runtime:env-1' : undefined
   useAppStore.setState({
-    repos: [{ id: 'repo', path: '/ws', displayName: 'Repo', badgeColor: 'gray', addedAt: 0 }],
+    repos: [
+      {
+        id: 'repo',
+        path: '/ws',
+        displayName: 'Repo',
+        badgeColor: 'gray',
+        addedAt: 0,
+        ...(hostId ? { executionHostId: hostId } : {})
+      }
+    ],
     worktreesByRepo: {
-      repo: [makeWorktree({ id: SAME_PATH_WORKTREE_ID, repoId: 'repo', path: '/ws' })]
+      repo: [
+        makeWorktree({
+          id: SAME_PATH_WORKTREE_ID,
+          repoId: 'repo',
+          path: '/ws',
+          ...(hostId ? { hostId } : {})
+        })
+      ]
     },
     openFiles: files,
     editorDrafts: Object.fromEntries(files.map((file) => [file.id, `draft ${file.id}`])),

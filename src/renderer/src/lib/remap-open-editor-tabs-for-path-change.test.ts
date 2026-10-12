@@ -8,8 +8,10 @@ import {
   SAME_PATH_WORKTREE_ID,
   expectOnlyOwnerMoved,
   seedSamePathEditorOwners,
-  type SamePathOwner
+  type SamePathOwner,
+  type SamePathWorkspaceRoute
 } from './same-path-editor-owners-test-fixture'
+import { resolveWorktreeOperationRoute } from './worktree-operation-route'
 
 function ownedEditorFileId(
   filePath: string,
@@ -154,6 +156,7 @@ describe('remapOpenEditorTabsForPathChange', () => {
       filePath: oldPath,
       relativePath: 'docs/readme.md',
       worktreeId: 'wt-1',
+      runtimeEnvironmentId: null,
       language: 'markdown'
     })
     state.openMarkdownPreview({
@@ -244,14 +247,27 @@ describe('remapOpenEditorTabsForPathChange', () => {
     expect(useAppStore.getState().editorDrafts[idB]).toBe('draft B')
   })
 
-  it.each([
-    ['local', { runtimeEnvironmentId: null, sshTargetId: null }],
-    ['runtime', { runtimeEnvironmentId: 'env-1', sshTargetId: null }],
-    ['ssh', { runtimeEnvironmentId: null, sshTargetId: 'ssh-x' }]
-  ] as const)(
-    'moves only the %s-owned record when same-path owners share a workspace',
-    (owner: SamePathOwner, operationOwner) => {
-      seedSamePathEditorOwners()
+  it.each(
+    (['local', 'runtime'] as const).flatMap((route) =>
+      (
+        [
+          ['local', { runtimeEnvironmentId: null, sshTargetId: null }],
+          ['runtime', { runtimeEnvironmentId: 'env-1', sshTargetId: null }],
+          ['ssh', { runtimeEnvironmentId: null, sshTargetId: 'ssh-x' }]
+        ] as const
+      ).map(([owner, operationOwner]) => [owner, route, operationOwner] as const)
+    )
+  )(
+    'moves only the %s-owned record when same-path owners share a %s-routed workspace',
+    (owner: SamePathOwner, route: SamePathWorkspaceRoute, operationOwner) => {
+      seedSamePathEditorOwners(route)
+      // Precondition: the workspace route comes from its rows, not the Active Server setting.
+      expect(
+        resolveWorktreeOperationRoute(
+          { ...useAppStore.getState(), settings: null, activeWorktreeId: null },
+          SAME_PATH_WORKTREE_ID
+        )?.executionHostId
+      ).toBe(route === 'runtime' ? 'runtime:env-1' : 'local')
 
       const result = remapOpenEditorTabsForPathChange({
         fromPath: SAME_PATH_FROM,
@@ -266,7 +282,7 @@ describe('remapOpenEditorTabsForPathChange', () => {
     }
   )
 
-  it('moves an ownerless record only in the workspace that performed the move', () => {
+  it('leaves an ownerless record in place when its workspace has no route', () => {
     const file = {
       filePath: '/repo/a.md',
       relativePath: 'a.md',
@@ -289,8 +305,12 @@ describe('remapOpenEditorTabsForPathChange', () => {
       operationOwner: LOCAL_MOVE
     })
 
+    // Why: no row names the record's host, so a guess could retarget a file the rename never touched.
     const files = useAppStore.getState().openFiles
-    expect(files.find((f) => f.worktreeId === 'wt-uncataloged')?.filePath).toBe('/repo/b.md')
+    expect(files.find((f) => f.worktreeId === 'wt-uncataloged')).toMatchObject({
+      id: 'mover',
+      filePath: '/repo/a.md'
+    })
     expect(files.find((f) => f.worktreeId === 'wt-other')).toMatchObject({
       id: 'bystander',
       filePath: '/repo/a.md'
@@ -519,6 +539,7 @@ describe('remapOpenEditorTabsForPathChange', () => {
       filePath: oldPath,
       relativePath: 'untitled.md',
       worktreeId: 'wt-1',
+      runtimeEnvironmentId: null,
       language: 'markdown',
       isUntitled: true,
       mode: 'edit'

@@ -25,7 +25,8 @@ import {
   SAME_PATH_WORKTREE_ID,
   expectOnlyOwnerMoved,
   seedSamePathEditorOwners,
-  type SamePathOwner
+  type SamePathOwner,
+  type SamePathWorkspaceRoute
 } from './same-path-editor-owners-test-fixture'
 
 const CONTEXT = {
@@ -260,22 +261,28 @@ describe('executeOpenEditorPathMove', () => {
     })
   })
 
-  it.each([
-    ['local', { target: { kind: 'local' } }],
-    ['runtime', { target: { kind: 'environment', environmentId: 'env-1' } }],
-    [
-      'ssh',
-      {
-        target: { kind: 'local' },
-        connectionId: 'ssh-x',
-        expectedExecutionHostId: 'ssh:ssh-x',
-        expectedSshTargetId: 'ssh-x'
-      }
-    ]
-  ] as const)(
-    'quiesces and moves only the %s-owned record of a shared path',
-    async (owner: SamePathOwner, route) => {
-      seedSamePathEditorOwners()
+  it.each(
+    (['local', 'runtime'] as const).flatMap((workspaceRoute) =>
+      (
+        [
+          ['local', { target: { kind: 'local' } }],
+          ['runtime', { target: { kind: 'environment', environmentId: 'env-1' } }],
+          [
+            'ssh',
+            {
+              target: { kind: 'local' },
+              connectionId: 'ssh-x',
+              expectedExecutionHostId: 'ssh:ssh-x',
+              expectedSshTargetId: 'ssh-x'
+            }
+          ]
+        ] as const
+      ).map(([owner, route]) => [owner, workspaceRoute, route] as const)
+    )
+  )(
+    'quiesces and moves only the %s-owned record of a shared path in a %s-routed workspace',
+    async (owner: SamePathOwner, workspaceRoute: SamePathWorkspaceRoute, route) => {
+      seedSamePathEditorOwners(workspaceRoute)
       vi.mocked(requestEditorSaveQuiesce).mockClear()
 
       await executeOpenEditorPathMove({

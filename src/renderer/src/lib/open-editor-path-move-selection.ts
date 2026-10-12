@@ -27,13 +27,18 @@ export function selectOpenFilesForPathMove(
     if (!isPathInsideOrEqual(fromPath, file.filePath)) {
       return false
     }
-    const host = getEditorFileBackingHost(file, state)
+    // Why: the Active Server setting names no file's host; blanking it keeps the route focus-free.
+    const host = getEditorFileBackingHost(file, { ...state, settings: null })
     if (!host.executionHostId) {
-      // Why: floating files live on this machine; any other ownerless file can only belong to
-      // the workspace that moved it.
-      return file.worktreeId === FLOATING_TERMINAL_WORKTREE_ID
-        ? owner.runtimeEnvironmentId === null && owner.sshTargetId === null
-        : file.worktreeId === worktreeId
+      // Why: floating files live on this machine; a file that says "no runtime" in the workspace a
+      // local rename ran in is that machine's. Any other unplaced file stays put — a guessed host
+      // would retarget a file on a disk the rename never touched.
+      const isLocalMove = owner.runtimeEnvironmentId === null && owner.sshTargetId === null
+      return (
+        isLocalMove &&
+        (file.worktreeId === FLOATING_TERMINAL_WORKTREE_ID ||
+          (file.worktreeId === worktreeId && file.runtimeEnvironmentId === null))
+      )
     }
     const parsed = parseExecutionHostId(host.executionHostId)
     return (
