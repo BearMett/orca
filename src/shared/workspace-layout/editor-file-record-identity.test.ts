@@ -8,7 +8,7 @@ import { nameBasedLoadContext } from './workspace-layout-minted-ids'
 import { saveWorkspaceLayout } from './workspace-layout-save'
 import { applyLayoutCommand } from './workspace-layout-commands'
 import { testContext, WS } from './workspace-layout-command.test-fixture'
-import { projectSessionTabs } from './old-client/old-client-session-tabs-projection'
+import { projectSessionTabs } from './old-client'
 import { pruneViewRecord } from './workspace-layout-view-prune'
 
 const PATH = '/repo/note.md'
