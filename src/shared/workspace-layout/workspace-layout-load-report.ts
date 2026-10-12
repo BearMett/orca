@@ -5,6 +5,7 @@ import type { WorkspaceSessionState } from '../workspace-session-state-types'
 import type { DiskTable } from './workspace-layout-disk-fields'
 import { collectLayoutLeafIdsInOrder } from './terminal-pane-tree'
 import { paneKeyOf } from './workspace-layout-model'
+import { editorFileRecordKey } from './editor-file-record-identity'
 
 export type LayoutLoadChange = {
   /** A disk-field table name (workspace-layout-disk-fields.ts). */
@@ -78,7 +79,13 @@ export function diskRecords(session: WorkspaceSessionState): DiskRecords {
     groups.forEach((group) => records.group.set(`${key}|${group.id}`, group))
   }
   for (const [key, files] of Object.entries(session.openFilesByWorktree ?? {})) {
-    files.forEach((file) => records.file.set(`${key}|${file.filePath}`, file))
+    const occurrences = new Map<string, number>()
+    for (const file of files) {
+      const id = editorFileRecordKey(file, key)
+      const occurrence = occurrences.get(id) ?? 0
+      occurrences.set(id, occurrence + 1)
+      records.file.set(JSON.stringify([key, id, occurrence]), file)
+    }
   }
   for (const [key, tabs] of Object.entries(session.browserTabsByWorktree ?? {})) {
     tabs.forEach((tab) => records.browser.set(`${key}|${tab.id}`, tab))

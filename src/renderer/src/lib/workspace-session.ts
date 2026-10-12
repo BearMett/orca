@@ -133,6 +133,8 @@ export function buildEditorSessionData(
     // Why: never persist a dirty draft for a read-only tab — restoring one would reintroduce writable/hot-exit state for an agent transcript.
     const dirtyDraftContent = f.isDirty && f.readOnly !== true ? editorDrafts[f.id] : undefined
     arr.push({
+      id: f.id,
+      ...(f.recoveredDraft ? { recoveredDraft: true } : {}),
       filePath: f.filePath,
       relativePath: f.relativePath,
       worktreeId: f.worktreeId,

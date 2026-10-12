@@ -3,6 +3,10 @@ import { build, testContext, WS } from './workspace-layout-command.test-fixture'
 import type { LayoutEditorFile, WorkspaceLayoutModel } from './workspace-layout-model'
 import { checkWorkspaceLayoutModelRules } from './workspace-layout-model-rules'
 import { applyLayoutTransition } from './workspace-layout-transitions'
+import { loadWorkspaceLayout } from './workspace-layout-load'
+import { saveWorkspaceLayout } from './workspace-layout-save'
+import { nameBasedLoadContext } from './workspace-layout-minted-ids'
+import { getDefaultWorkspaceSession } from '../constants'
 import type { EditorFileRename } from './workspace-layout-editor-rekey'
 
 const file = (filePath: string): LayoutEditorFile => ({
@@ -136,5 +140,94 @@ describe('editor tabs follow a rename', () => {
       result.ok && result.model.workspaces[WS]!.tabs.some((tab) => tab.id === '/repo/c.ts')
     ).toBe(true)
     expect(result.ok && result.result.renamedTabIds).toEqual({ '/repo/a.ts': '/repo/c.ts' })
+  })
+})
+
+describe('owned and recovered file renames', () => {
+  it('preserves recovered record IDs, drafts and baselines after a rename and restart', () => {
+    const stored = {
+      ...getDefaultWorkspaceSession(),
+      openFilesByWorktree: {
+        [WS]: ['first', 'second'].map((id) => ({
+          id,
+          filePath: '/repo/note.ts',
+          relativePath: 'note.ts',
+          worktreeId: WS,
+          language: 'typescript',
+          recoveredDraft: true as const,
+          dirtyDraftContent: `${id}-draft`,
+          lastKnownDiskSignature: `${id}-baseline`
+        }))
+      },
+      unifiedTabs: {
+        [WS]: ['first', 'second'].map((id) => ({
+          id: `tab-${id}`,
+          entityId: id,
+          worktreeId: WS,
+          groupId: 'g',
+          contentType: 'editor' as const,
+          label: 'note.ts',
+          customLabel: null,
+          color: null,
+          sortOrder: 0,
+          createdAt: 0
+        }))
+      },
+      tabGroups: {
+        [WS]: [
+          {
+            id: 'g',
+            worktreeId: WS,
+            activeTabId: 'tab-first',
+            tabOrder: ['tab-first', 'tab-second']
+          }
+        ]
+      }
+    }
+    const loaded = loadWorkspaceLayout('local', stored, nameBasedLoadContext())
+    const result = rename(loaded.layout, [
+      { fromFilePath: '/repo/note.ts', toFilePath: '/repo/new.ts', toRelativePath: 'new.ts' }
+    ])
+    if (!result.ok) {
+      throw new Error(result.code)
+    }
+    const saved = saveWorkspaceLayout({ ...loaded, layout: result.model })
+    expect(saved.openFilesByWorktree?.[WS]).toEqual(
+      stored.openFilesByWorktree[WS].map((record) => ({
+        ...record,
+        filePath: '/repo/new.ts',
+        relativePath: 'new.ts'
+      }))
+    )
+    expect(
+      saveWorkspaceLayout(loadWorkspaceLayout('local', saved, nameBasedLoadContext()))
+        .openFilesByWorktree
+    ).toEqual(saved.openFilesByWorktree)
+  })
+
+  it('refuses a path-only rename when two owners share the source path', () => {
+    const loaded = loadWorkspaceLayout(
+      'local',
+      {
+        ...getDefaultWorkspaceSession(),
+        openFilesByWorktree: {
+          [WS]: [null, 'remote'].map((runtimeEnvironmentId) => ({
+            filePath: '/repo/note.ts',
+            relativePath: 'note.ts',
+            worktreeId: WS,
+            language: 'typescript',
+            runtimeEnvironmentId
+          }))
+        }
+      },
+      nameBasedLoadContext()
+    )
+    const before = structuredClone(loaded.layout)
+    expect(
+      rename(loaded.layout, [
+        { fromFilePath: '/repo/note.ts', toFilePath: '/repo/new.ts', toRelativePath: 'new.ts' }
+      ])
+    ).toEqual({ ok: false, code: 'invalid_params' })
+    expect(loaded.layout).toEqual(before)
   })
 })

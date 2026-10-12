@@ -92,7 +92,12 @@ export function createOpenFileMutations(
         }
         const nextOpenFiles = s.openFiles.map((f) =>
           f.id === fileId
-            ? { ...f, isDirty: dirty, ...(needsPreviewClear ? { isPreview: undefined } : {}) }
+            ? {
+                ...f,
+                isDirty: dirty,
+                ...(!dirty ? { recoveredDraft: undefined } : {}),
+                ...(needsPreviewClear ? { isPreview: undefined } : {})
+              }
             : f
         )
         return {

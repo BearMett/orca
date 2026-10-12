@@ -13,6 +13,7 @@ import type {
   WorkspaceLayoutModel
 } from './workspace-layout-model'
 import type { LayoutViewRecord } from './workspace-layout-views'
+import { editorFileRecordKey } from './editor-file-record-identity'
 
 type Workspaces = WorkspaceLayoutModel['workspaces']
 
@@ -56,6 +57,8 @@ const tabIds = (workspace: WorkspaceLayout): string[] => workspace.tabs.map((tab
 const groupIds = (workspace: WorkspaceLayout): string[] => workspace.groups.map((group) => group.id)
 const filePaths = (workspace: WorkspaceLayout): string[] =>
   workspace.editorFiles?.map((file) => file.filePath) ?? []
+const fileRecordIds = (workspace: WorkspaceLayout): string[] =>
+  workspace.editorFiles?.map((file) => editorFileRecordKey(file, workspace.worktreeId)) ?? []
 const browserTabIds = (workspace: WorkspaceLayout): string[] =>
   workspace.browserTabs?.map((tab) => tab.id) ?? []
 const terminalTabIds = (workspace: WorkspaceLayout): string[] =>
@@ -113,7 +116,7 @@ export function pruneViewRecord(
     groups,
     lastFocusedAt: keepHeldIds(record.lastFocusedAt, workspaces, tabIds),
     panes,
-    editorDrafts: keepHeldIds(record.editorDrafts, workspaces, filePaths)
+    editorDrafts: keepHeldIds(record.editorDrafts, workspaces, fileRecordIds)
   }
   if (activeGroups) {
     pruned.activeGroupIdByWorktree = filterRecord(
@@ -132,7 +135,7 @@ export function pruneViewRecord(
     pruned.activeFileIdByWorktree = clearMissingIds(
       record.activeFileIdByWorktree,
       workspaces,
-      filePaths
+      (workspace) => [...filePaths(workspace), ...fileRecordIds(workspace)]
     )
   }
   if (record.activeBrowserTabIdByWorktree) {

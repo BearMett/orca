@@ -58,6 +58,7 @@ const IDENTITY_SOURCES = new Set<LayoutSource>([
   'tab.kind',
   'group.id',
   'file.filePath',
+  'file.id',
   'browserTab.id',
   'leaf.$key'
 ])
@@ -124,6 +125,8 @@ function populate(loaded: LoadedWorkspaceLayout): LoadedWorkspaceLayout {
   fill(loaded, 'tab.terminal.agentLaunchPane', { leafId: leaf(1) })
   fill(loaded, 'file.externalSshTargetId', 'box')
   fill(loaded, 'file.runtimeEnvironmentId', 'env')
+  fill(loaded, 'file.id', 'editor-record-1')
+  fill(loaded, 'file.recoveredDraft', true)
   fill(loaded, 'file.readOnly', true)
   fill(loaded, 'file.liveTail', true)
   // A focused and an expanded pane that is not the first, so a fallback is visible.

@@ -41,6 +41,7 @@ export type OpenFile = {
   worktreeId: string
   language: string
   isDirty: boolean
+  recoveredDraft?: true
   // Why: remote untitled cleanup must target the creating environment even if the user later switches runtime.
   runtimeEnvironmentId?: string | null
   /** SSH target that owns an absolute path outside the worktree. */

@@ -7,6 +7,7 @@ import { admitsInitialSurface } from './workspace-layout-initial-surface'
 import type { LayoutContentTab, WorkspaceLayoutModel } from './workspace-layout-model'
 import { withWorkspace } from './workspace-layout-removal'
 import { placeContentTab } from './workspace-layout-tab-commands'
+import { resolveEditorFileRecord } from './editor-file-record-identity'
 
 function contentTab(
   context: LayoutContext,
@@ -44,7 +45,8 @@ export function openEditorTab(
   const file = command.file
   if (file) {
     const workspace = next.workspaces[key]!
-    const files = (workspace.editorFiles ?? []).filter((entry) => entry.filePath !== file.filePath)
+    const existingFile = resolveEditorFileRecord(workspace.editorFiles, command.fileId, key)
+    const files = (workspace.editorFiles ?? []).filter((entry) => entry !== existingFile)
     next = withWorkspace(next, key, { ...workspace, editorFiles: [...files, file] })
   }
   return applied(withEditorView(next, key, tab.id, command.view), {

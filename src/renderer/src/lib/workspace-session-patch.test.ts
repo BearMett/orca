@@ -125,6 +125,7 @@ describe('buildWorkspaceSessionPatch', () => {
     expect(patch.openFilesByWorktree).toEqual({
       'wt-1': [
         {
+          id: '/tmp/demo.ts',
           filePath: '/tmp/demo.ts',
           runtimeEnvironmentId: undefined,
           externalSshTargetId: undefined,

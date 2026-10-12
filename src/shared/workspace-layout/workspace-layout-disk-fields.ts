@@ -187,6 +187,8 @@ const LAYOUT = {
 } as const satisfies Record<keyof TerminalLayoutSnapshot, DiskFieldWritten>
 
 const FILE = {
+  id: own('file', 'id'),
+  recoveredDraft: own('file', 'recoveredDraft'),
   filePath: own('file', 'filePath'),
   relativePath: own('file', 'relativePath'),
   worktreeId: WORKTREE,

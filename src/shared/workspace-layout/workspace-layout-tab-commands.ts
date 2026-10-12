@@ -28,6 +28,7 @@ import {
 } from './workspace-layout-model'
 import { admitsInitialSurface } from './workspace-layout-initial-surface'
 import { removeTabFromWorkspace, withWorkspace } from './workspace-layout-removal'
+import { resolveEditorFileRecord } from './editor-file-record-identity'
 
 type RefusedClose = NonNullable<LayoutCommandResult['refused']>[number]
 
@@ -84,9 +85,10 @@ export function closeTab(
     next.editorFiles &&
     !next.tabs.some((entry) => entry.entityId === tab.entityId)
   ) {
+    const file = resolveEditorFileRecord(next.editorFiles, tab.entityId, key)
     next = {
       ...next,
-      editorFiles: next.editorFiles.filter((file) => file.filePath !== tab.entityId)
+      editorFiles: next.editorFiles.filter((entry) => entry !== file)
     }
   }
   if (next.editorViews) {

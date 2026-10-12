@@ -93,9 +93,11 @@ export function isAutosaveSuspendedForFile(
     | 'pendingDiskBaselineVerification'
     | 'pendingLiveDiskVerification'
     | 'pendingOwnerMigration'
+    | 'recoveredDraft'
   >
 ): boolean {
   return (
+    file.recoveredDraft === true ||
     file.externalMutation === 'changed' ||
     file.pendingDiskBaselineVerification === true ||
     file.pendingLiveDiskVerification === true ||

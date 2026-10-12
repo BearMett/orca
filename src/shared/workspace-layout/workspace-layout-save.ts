@@ -19,6 +19,7 @@ import type { LoadedWorkspaceLayout } from './workspace-layout-load-types'
 import { collectLayoutLeafIdsInOrder } from './terminal-pane-tree'
 import { paneKeyOf, tabsInOrder, type WorkspaceLayout } from './workspace-layout-model'
 import { saveTabBarEntry, saveTerminalLayout, saveTerminalRow } from './workspace-layout-save-tabs'
+import { editorFileRecordKey, resolveEditorFileRecord } from './editor-file-record-identity'
 
 type WorkspaceMaps = {
   tabsByWorktree: Record<string, TerminalTab[]>
@@ -100,15 +101,19 @@ function saveWorkspace(
   if (workspace.editorFiles) {
     // One preview fact per editor tab; today's writer stores the file's copy only when true.
     const previewFiles = new Set(
-      workspace.tabs.flatMap((tab) =>
-        tab.kind === 'editor' && tab.isPreview ? [tab.entityId] : []
-      )
+      workspace.tabs.flatMap((tab) => {
+        const file =
+          tab.kind === 'editor' && tab.isPreview
+            ? resolveEditorFileRecord(workspace.editorFiles, tab.entityId, key)
+            : undefined
+        return file ? [file] : []
+      })
     )
     session.openFilesByWorktree[key] = workspace.editorFiles.map((file): PersistedOpenFile => ({
       ...file,
       worktreeId,
-      ...(previewFiles.has(file.filePath) ? { isPreview: true } : {}),
-      ...view.editorDrafts[key]?.[file.filePath]
+      ...(previewFiles.has(file) ? { isPreview: true } : {}),
+      ...view.editorDrafts[key]?.[editorFileRecordKey(file, key)]
     }))
   }
   if (workspace.browserTabs) {

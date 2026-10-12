@@ -6,7 +6,11 @@ import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../../../shared/constant
 import { folderWorkspaceKey } from '../../../../../../shared/workspace-scope'
 import type { WorkspaceVisibleTabType } from '../../../../../../shared/tab-types'
 import type { OpenFile } from '../types/open-file'
+import { preservePersistedEditorFileRecords } from '../../../../../../shared/workspace-layout/persisted-editor-file-records'
+import { editorFileRecordKey } from '../../../../../../shared/workspace-layout/editor-file-record-identity'
+import { createBrowserUuid } from '@/lib/browser-uuid'
 import { buildValidWorktreeIdsForSessionHydration } from '../../degraded-repo-worktree-validity'
+import { getOpenFileExecutionHostId } from '@/lib/unified-tab-host-ownership'
 import { buildOwnedEditorFileId } from '../file-ids/editor-file-ids'
 import { resolveHydratedEditorFileSelection } from '../file-ids/hydrated-editor-file-selection'
 import { resolveHydratedEditorFrontmatter } from '../file-ids/hydrated-editor-frontmatter'
@@ -19,7 +23,7 @@ import {
 
 export function createHydrateEditorSession(
   set: EditorSet,
-  _get: EditorGet
+  get: EditorGet
 ): Pick<EditorSlice, 'hydrateEditorSession'> {
   return {
     hydrateEditorSession: (session, options) => {
@@ -48,22 +52,35 @@ export function createHydrateEditorSession(
           if (!validWorktreeIds.has(worktreeId)) {
             continue
           }
-          for (const pf of files) {
-            // Split tabs share one OpenFile; repeated records for the same owner are corruption.
-            if (legacyFileIndex.hasOwner(pf, worktreeId)) {
-              continue
-            }
-            const legacyId = legacyFileIndex.resolve(pf, worktreeId)
+          for (const pf of preservePersistedEditorFileRecords(
+            files,
+            worktreeId,
+            createBrowserUuid
+          )) {
+            const legacyId =
+              pf.id &&
+              (files.some((file) => file.id === pf.id) || legacyFileIndex.hasOwner(pf, worktreeId))
+                ? pf.id
+                : legacyFileIndex.resolve(pf, worktreeId)
             // Why: floating/runtime-owned files need IDs that survive peers disappearing between restarts; collision-based IDs drift when the path is no longer open elsewhere.
             const ownedId = buildOwnedEditorFileId(pf.filePath, worktreeId, pf.runtimeEnvironmentId)
-            const id =
-              shouldHydrateWithOwnedEditorFileId(worktreeId, pf.runtimeEnvironmentId) ||
-              usedOpenFileIds.has(pf.filePath)
-                ? ownedId
-                : pf.filePath
+            const persistedId =
+              pf.id === pf.filePath &&
+              shouldHydrateWithOwnedEditorFileId(worktreeId, pf.runtimeEnvironmentId)
+                ? undefined
+                : pf.id
+            let id =
+              persistedId ??
+              (pf.externalSshTargetId
+                ? editorFileRecordKey(pf, worktreeId)
+                : shouldHydrateWithOwnedEditorFileId(worktreeId, pf.runtimeEnvironmentId) ||
+                    usedOpenFileIds.has(pf.filePath)
+                  ? ownedId
+                  : pf.filePath)
             // Why: the persisted schema allows repeated (path, worktree, runtime) tuples, and an owned id repeats verbatim — restoring both would put two files under one id.
+            const recovery = pf.recoveredDraft || usedOpenFileIds.has(id)
             if (usedOpenFileIds.has(id)) {
-              continue
+              id = createBrowserUuid()
             }
             usedOpenFileIds.add(id)
             // Why: map from the collision-derived legacy id; keying by filePath would collapse same-path local/runtime tabs onto the last owner to hydrate.
@@ -72,7 +89,8 @@ export function createHydrateEditorSession(
               id: legacyId,
               filePath: pf.filePath,
               worktreeId,
-              runtimeEnvironmentId: pf.runtimeEnvironmentId
+              runtimeEnvironmentId: pf.runtimeEnvironmentId,
+              externalSshTargetId: pf.externalSshTargetId
             })
             // Why: read-only tabs (AI Vault View Log) must restore clean — ignore any persisted dirty draft/baseline so they can't come back writable.
             const isReadOnly = pf.readOnly === true
@@ -87,6 +105,7 @@ export function createHydrateEditorSession(
               // Why: re-detect language on hydrate — older sessions stored ids from before extensions like .ipynb were supported.
               language: detectLanguage(pf.relativePath || pf.filePath),
               isDirty: !isReadOnly && pf.dirtyDraftContent !== undefined,
+              ...(recovery ? { recoveredDraft: true } : {}),
               isPreview: pf.isPreview,
               runtimeEnvironmentId: pf.runtimeEnvironmentId,
               externalSshTargetId: pf.externalSshTargetId,
@@ -155,6 +174,20 @@ export function createHydrateEditorSession(
           ...migrateHydratedEditorTabsAndGroups(s, editorFileIdMigrationsByWorktree)
         }
       })
+      for (const file of get().openFiles) {
+        if (
+          file.recoveredDraft &&
+          !get().unifiedTabsByWorktree[file.worktreeId]?.some((tab) => tab.entityId === file.id)
+        ) {
+          get().createUnifiedTab(file.worktreeId, 'editor', {
+            entityId: file.id,
+            executionHostId: getOpenFileExecutionHostId(file),
+            label: file.relativePath.split(/[\\/]/).at(-1) ?? file.relativePath,
+            activate: false,
+            recordInteraction: false
+          })
+        }
+      }
     }
   }
 }

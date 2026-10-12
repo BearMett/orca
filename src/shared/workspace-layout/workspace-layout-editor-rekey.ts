@@ -4,6 +4,7 @@
 import { applied, refuse, type Applied } from './workspace-layout-command-steps'
 import type { LayoutEditorFile, WorkspaceLayoutModel } from './workspace-layout-model'
 import { withWorkspace } from './workspace-layout-removal'
+import { resolveEditorFileRecord } from './editor-file-record-identity'
 
 /** One renamed file; the rename boundary expands a renamed folder into its open files. */
 export type EditorFileRename = {
@@ -27,8 +28,29 @@ export function renameEditorFiles(
   if (!workspace) {
     return applied(model)
   }
+  for (const rename of renames) {
+    const owners = new Set(
+      (workspace.editorFiles ?? [])
+        .filter((file) => file.filePath === rename.fromFilePath)
+        .map((file) =>
+          JSON.stringify([
+            file.runtimeEnvironmentId?.trim() || null,
+            file.externalSshTargetId ?? null
+          ])
+        )
+    )
+    if (owners.size > 1) {
+      return refuse('invalid_params')
+    }
+  }
   const openPaths = new Set(
-    workspace.tabs.flatMap((tab) => (tab.kind === 'editor' ? [tab.entityId] : []))
+    workspace.tabs.flatMap((tab) => {
+      const file =
+        tab.kind === 'editor'
+          ? resolveEditorFileRecord(workspace.editorFiles, tab.entityId, workspaceKey)
+          : undefined
+      return file ? [file.filePath] : []
+    })
   )
   const moves = new Map(
     renames
@@ -49,7 +71,11 @@ export function renameEditorFiles(
   // A tab-bar id that is the file's path follows it too.
   const renamedTabIds = new Map<string, string>()
   const tabs = workspace.tabs.map((tab) => {
-    if (tab.kind !== 'editor' || !moves.has(tab.entityId)) {
+    const file =
+      tab.kind === 'editor'
+        ? resolveEditorFileRecord(workspace.editorFiles, tab.entityId, workspaceKey)
+        : undefined
+    if (!file || !moves.has(file.filePath) || file.id || tab.entityId !== file.filePath) {
       return tab
     }
     const id = tab.id === tab.entityId ? renamedPath(tab.id) : tab.id
@@ -60,11 +86,23 @@ export function renameEditorFiles(
     ...group,
     tabOrder: group.tabOrder.map((id) => renamedTabIds.get(id) ?? id)
   }))
+  const opaqueFileIds = new Map(
+    workspace.tabs.flatMap((tab) => {
+      const file =
+        tab.kind === 'editor'
+          ? resolveEditorFileRecord(workspace.editorFiles, tab.entityId, workspaceKey)
+          : undefined
+      return file && !file.id && tab.entityId !== file.filePath
+        ? [[file, tab.entityId] as const]
+        : []
+    })
+  )
   const editorFiles = workspace.editorFiles?.map((file): LayoutEditorFile => {
     const rename = moves.get(file.filePath)
     return rename
       ? {
           ...file,
+          ...(opaqueFileIds.has(file) ? { id: opaqueFileIds.get(file) } : {}),
           filePath: rename.toFilePath,
           relativePath: rename.toRelativePath,
           ...(rename.toLanguage !== undefined ? { language: rename.toLanguage } : {})

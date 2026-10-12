@@ -57,6 +57,8 @@ export const KNOWN_LOAD_CHANGES: ReadonlySet<string> = new Set([
   'entry.groupId',
   'entry.isPreview',
   'file.isPreview',
+  'file.id',
+  'file.recoveredDraft',
   'file.worktreeId',
   'browser.worktreeId',
   'sleeping.worktreeId',

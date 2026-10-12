@@ -8,6 +8,8 @@ import {
 import { childRecord, omitStoredFields, pickStoredFields } from './stored-record-fields'
 import type { WorkspaceLoadArgs } from './workspace-layout-load-types'
 import type { LayoutBrowserTab, LayoutEditorFile, LayoutTab } from './workspace-layout-model'
+import { editorFileRecordKey, resolveEditorFileRecord } from './editor-file-record-identity'
+import { preservePersistedEditorFileRecords } from './persisted-editor-file-records'
 
 /**
  * Every record of a workspace names its worktree id. Stored data can disagree: the value most
@@ -49,19 +51,26 @@ export function loadEditorFiles(
   if (!files) {
     return undefined
   }
-  return files.map((file) => {
+  const retained = preservePersistedEditorFileRecords(files, key, args.context.mintId)
+  return retained.map((file) => {
     const draft = pickStoredFields(file, EDITOR_DRAFT_FIELDS)
     if (Object.keys(draft).length > 0) {
-      childRecord(view.editorDrafts, key)[file.filePath] = draft
+      childRecord(view.editorDrafts, key)[editorFileRecordKey(file, key)] = draft
     }
-    const fileTabs = tabs.filter((tab) => tab.kind === 'editor' && tab.entityId === file.filePath)
+    const fileTabs = tabs.filter(
+      (tab) =>
+        tab.kind === 'editor' && resolveEditorFileRecord(retained, tab.entityId, key) === file
+    )
     // The file's copy is true when any of its tabs is preview (split groups share one file).
     const demoted = file.isPreview === true ? [] : fileTabs.filter((tab) => tab.isPreview)
     for (const tab of demoted) {
       // Loaded tabs are fresh copies, so this touches no stored data.
       delete tab.isPreview
     }
-    return omitStoredFields(file, [...EDITOR_DRAFT_FIELDS, 'isPreview', 'worktreeId'])
+    return {
+      ...omitStoredFields(file, [...EDITOR_DRAFT_FIELDS, 'isPreview', 'worktreeId']),
+      ...(Object.keys(draft).length > 0 && !file.id ? { id: editorFileRecordKey(file, key) } : {})
+    }
   })
 }
 

@@ -5,6 +5,7 @@ import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../../../shared/constant
 import type { OpenFile } from '../types/open-file'
 import { isEditorTabContentType } from '../tabs/editor-tab-content-type'
 import { buildOwnedEditorFileId, runtimeOwnerKey } from './editor-file-ids'
+import { dedupeEditorTabsWithinGroups } from '../../tab-group-state'
 
 export function shouldHydrateWithOwnedEditorFileId(
   worktreeId: string,
@@ -31,27 +32,41 @@ export function addEditorFileIdMigration(
 
 export type LegacyHydratedEditorFile = Pick<
   OpenFile,
-  'id' | 'filePath' | 'worktreeId' | 'runtimeEnvironmentId' | 'markdownPreviewSourceFileId'
+  | 'id'
+  | 'filePath'
+  | 'worktreeId'
+  | 'runtimeEnvironmentId'
+  | 'externalSshTargetId'
+  | 'markdownPreviewSourceFileId'
 >
 
 export class LegacyHydratedEditorFileIndex {
   private readonly filesByPath = new Map<string, Map<string, string>>()
   private readonly ownersById = new Map<string, Set<string>>()
 
-  private ownerKey(worktreeId: string, runtimeEnvironmentId: string | null | undefined): string {
-    return JSON.stringify([worktreeId, runtimeOwnerKey(runtimeEnvironmentId)])
+  private ownerKey(
+    worktreeId: string,
+    runtimeEnvironmentId: string | null | undefined,
+    externalSshTargetId?: string
+  ): string {
+    return JSON.stringify([
+      worktreeId,
+      runtimeOwnerKey(runtimeEnvironmentId),
+      externalSshTargetId ?? null
+    ])
   }
 
   hasOwner(file: PersistedOpenFile, worktreeId: string): boolean {
     return (
       this.filesByPath
         .get(file.filePath)
-        ?.has(this.ownerKey(worktreeId, file.runtimeEnvironmentId)) ?? false
+        ?.has(this.ownerKey(worktreeId, file.runtimeEnvironmentId, file.externalSshTargetId)) ??
+      false
     )
   }
 
   resolve(file: PersistedOpenFile, worktreeId: string): string {
-    const owner = this.ownerKey(worktreeId, file.runtimeEnvironmentId)
+    const owner = this.ownerKey(worktreeId, file.runtimeEnvironmentId, file.externalSshTargetId)
     const existing = this.filesByPath.get(file.filePath)?.get(owner)
     if (existing !== undefined) {
       return existing
@@ -63,7 +78,11 @@ export class LegacyHydratedEditorFileIndex {
   }
 
   add(file: LegacyHydratedEditorFile): void {
-    const owner = this.ownerKey(file.worktreeId, file.runtimeEnvironmentId)
+    const owner = this.ownerKey(
+      file.worktreeId,
+      file.runtimeEnvironmentId,
+      file.externalSshTargetId
+    )
     let files = this.filesByPath.get(file.filePath)
     if (!files) {
       files = new Map()
@@ -156,10 +175,24 @@ export function migrateHydratedEditorTabsAndGroups(
       }
       return { ...tab, id: nextId, entityId: nextEntityId }
     })
+    const deduped = dedupeEditorTabsWithinGroups(nextTabs)
+    if (deduped.tabs.length !== nextTabs.length) {
+      tabsChanged = true
+      for (const aliases of deduped.tabIdAliasesByGroup.values()) {
+        for (const [from, to] of aliases) {
+          for (const [legacy, migrated] of tabIdMigrations) {
+            if (migrated === from) {
+              tabIdMigrations.set(legacy, to)
+            }
+          }
+          tabIdMigrations.set(from, to)
+        }
+      }
+    }
     if (tabIdMigrations.size > 0) {
       tabIdMigrationsByWorktree[worktreeId] = tabIdMigrations
     }
-    nextUnifiedTabsByWorktree[worktreeId] = nextTabs
+    nextUnifiedTabsByWorktree[worktreeId] = deduped.tabs
   }
 
   const nextGroupsByWorktree: Record<string, TabGroup[]> = { ...state.groupsByWorktree }

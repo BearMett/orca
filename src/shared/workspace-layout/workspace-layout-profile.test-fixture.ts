@@ -109,6 +109,7 @@ export function localDesktopSession(): WorkspaceSessionState {
   session.openFilesByWorktree = {
     [GIT_KEY]: [
       {
+        id: '/Users/dev/orca/src/app.ts',
         filePath: '/Users/dev/orca/src/app.ts',
         relativePath: 'src/app.ts',
         worktreeId: GIT_KEY,

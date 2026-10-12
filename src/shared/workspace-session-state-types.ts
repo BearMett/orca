@@ -13,6 +13,9 @@ import type { ClosedTerminalTabTombstonesByTabId } from './closed-terminal-tab-t
  *  Only edit-mode files are saved — diffs, conflict reviews, and other
  *  transient views are reconstructed on demand from git state. */
 export type PersistedOpenFile = {
+  id?: string
+  /** Separate buffers recovered from duplicate records require explicit saves. */
+  recoveredDraft?: true
   filePath: string
   relativePath: string
   worktreeId: string

@@ -5,6 +5,7 @@
 // epoch and version.
 
 import { defaultAgentChatLabel } from '../../agent-session-chat-label'
+import { editorFileRecordKey, resolveEditorFileRecord } from '../editor-file-record-identity'
 import { resolveTerminalTabTitle } from '../../tab-title-resolution'
 import type {
   RuntimeMobileSessionAgentTab,
@@ -247,7 +248,7 @@ function editorRow(
   tab: LayoutContentTab,
   scope: Scope
 ): RuntimeMobileSessionMarkdownTab | RuntimeMobileSessionFileTab | null {
-  const file = scope.workspace.editorFiles?.find((entry) => entry.filePath === tab.entityId)
+  const file = resolveEditorFileRecord(scope.workspace.editorFiles, tab.entityId, scope.key)
   if (!file) {
     return null
   }
@@ -256,7 +257,9 @@ function editorRow(
     title: file.relativePath.split(/[\\/]/).pop() || file.relativePath || 'File',
     filePath: file.filePath,
     relativePath: file.relativePath,
-    isDirty: scope.view.editorDrafts[scope.key]?.[file.filePath]?.dirtyDraftContent !== undefined,
+    isDirty:
+      scope.view.editorDrafts[scope.key]?.[editorFileRecordKey(file, scope.key)]
+        ?.dirtyDraftContent !== undefined,
     color: tab.color ?? null,
     isPinned: tab.isPinned === true,
     isActive: scope.activeTabId === tab.id
@@ -267,7 +270,7 @@ function editorRow(
       type: 'markdown',
       language: 'markdown',
       mode: 'edit',
-      sourceFileId: file.filePath,
+      sourceFileId: tab.entityId,
       sourceFilePath: file.filePath,
       sourceRelativePath: file.relativePath,
       documentVersion: `file:${file.filePath}`

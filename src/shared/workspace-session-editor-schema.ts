@@ -4,6 +4,8 @@
 import { z } from 'zod'
 
 export const persistedOpenFileSchema = z.object({
+  id: z.string().min(1).optional(),
+  recoveredDraft: z.literal(true).optional(),
   filePath: z.string(),
   relativePath: z.string(),
   worktreeId: z.string(),

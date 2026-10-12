@@ -277,7 +277,7 @@ export function remapOpenEditorTabsForPathChange({
     if (file.mode !== 'edit') {
       continue
     }
-    const newId = reservedSourceId(file)
+    const newId = file.recoveredDraft ? file.id : reservedSourceId(file)
     newEditIdByOldId.set(file.id, newId)
     rekeys.push({
       oldFileId: file.id,
