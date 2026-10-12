@@ -194,4 +194,20 @@ describe('persisted editor record normalization', () => {
       ).toEqual(normalized)
     }
   })
+
+  it('keeps same-content drafts apart when their disk baselines differ', () => {
+    const first = { ...record('file', null), id: undefined }
+    const second = { ...first, lastKnownDiskSignature: 'other-baseline' }
+    const normalized = preservePersistedEditorFileRecords([first, second], WS, (seed) => seed)
+    expect(normalized.map((file) => file.lastKnownDiskSignature)).toEqual([
+      'file-baseline',
+      'other-baseline'
+    ])
+    expect(new Set(normalized.map((file) => editorFileRecordKey(file, WS))).size).toBe(2)
+    expect(
+      preservePersistedEditorFileRecords([first, { ...first }], WS, () => {
+        throw new Error('identical drafts need no mint')
+      })
+    ).toEqual([first])
+  })
 })
