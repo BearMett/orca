@@ -38,7 +38,9 @@ import {
   closeFileById,
   isMirrorOf,
   openLocalFile,
+  pinTabById,
   readOpenFileRows,
+  readUnifiedEditorTabs,
   type OpenFileRow
 } from './helpers/editor-mirror-renderer-store'
 import {
@@ -246,25 +248,34 @@ test('client holding a mirror survives a real quit/relaunch without republishing
     // (a) disk after relaunch.
     await expectMarkedRowOnDisk('after relaunch')
 
-    // (b) restored mirror: log the id transition (owned `editor:` id from hydration -> bare path
-    //     after A's first post-relaunch snapshot), then require exactly one marked row.
+    // (b) restored mirror: the hydrated row keeps its owned `editor:` id when A's snapshot lands
+    //     (the resolver reuses an existing row for the same owner), so the id cannot show receipt.
+    //     A pins its tab after the relaunch and B2 must show the pin on the tab backed by its row.
+    const aTabId = (await readUnifiedEditorTabs(orcaPage, wtA)).find(
+      (tab) => tab.entityId === localId
+    )?.id
+    expect(aTabId, 'A has no unified tab for src/index.ts').toBeDefined()
+    await pinTabById(orcaPage, aTabId!)
     const idsSeen = new Set<string>()
-    await expect
-      .poll(
-        async () => {
-          const rows = await readOpenFileRows(B2.page, INDEX_SUFFIX)
-          for (const row of rows) {
-            idsSeen.add(`${row.id}|marker=${String(row.mirroredFromRuntimeSession)}`)
-          }
-          return rows.some((row) => row.id === indexPath)
-        },
-        {
-          timeout: 60_000,
-          message: `B2 never received A's post-relaunch snapshot (no bare-path row); ids seen: ${[...idsSeen].join(', ')}`
-        }
+    const receivedPin = async (): Promise<boolean> => {
+      const rows = await readOpenFileRows(B2.page, INDEX_SUFFIX)
+      for (const row of rows) {
+        idsSeen.add(`${row.id}|marker=${String(row.mirroredFromRuntimeSession)}`)
+      }
+      const rowIds = new Set(rows.map((row) => row.id))
+      return (await readUnifiedEditorTabs(B2.page, wtA)).some(
+        (tab) => rowIds.has(tab.entityId) && tab.isPinned
       )
-      .toBe(true)
-    log(`B2 src/index.ts id transition: ${[...idsSeen].join(' -> ')}`)
+    }
+    try {
+      await expect.poll(receivedPin, { timeout: 60_000 }).toBe(true)
+    } catch (error) {
+      throw new Error(
+        `B2 never received A's post-relaunch snapshot (pin not mirrored); ids seen: ${[...idsSeen].join(', ')}`,
+        { cause: error }
+      )
+    }
+    log(`B2 src/index.ts ids across hydration and A's snapshot: ${[...idsSeen].join(' -> ')}`)
     await expect
       .poll(
         async () => {

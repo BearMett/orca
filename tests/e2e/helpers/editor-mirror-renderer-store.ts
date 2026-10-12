@@ -17,6 +17,7 @@ type UnifiedEditorTab = {
   entityId: string
   label: string
   executionHostId: string | undefined
+  isPinned: boolean
 }
 
 type TerminalLayout = {
@@ -59,7 +60,8 @@ export async function readUnifiedEditorTabs(
         id: tab.id,
         entityId: tab.entityId,
         label: tab.label,
-        executionHostId: tab.executionHostId
+        executionHostId: tab.executionHostId,
+        isPinned: tab.isPinned === true
       }))
   }, worktreeId)
 }
@@ -130,6 +132,12 @@ export async function openLocalFile(
       { preview: false }
     )
   }, file)
+}
+
+export async function pinTabById(page: Page, tabId: string): Promise<void> {
+  await page.evaluate((tabId) => {
+    window.__store?.getState().pinTab(tabId)
+  }, tabId)
 }
 
 export async function closeFileById(page: Page, fileId: string): Promise<void> {
