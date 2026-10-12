@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeState as makePublicationState } from '../sync-runtime-graph-test-harness'
 import { applyWebSessionTabsSnapshot } from '../web-session-tabs-sync'
+import { buildOwnedEditorFileId } from '../../store/slices/editor/file-ids/editor-file-ids'
 import {
   ENV,
   HOST_SURFACE_ID,
@@ -172,7 +173,7 @@ describe('mirrored editor tab republication', () => {
     expect(buildMobileSessionTabSnapshots(afterState, false)[0]).toBe(after[0])
   })
 
-  it('characterizes first-wins publication when an old peer echoes a locally open file', () => {
+  it('keeps the local owner and tab when an old peer echoes the same path', () => {
     const localFile = {
       id: '/repo/app.ts',
       filePath: '/repo/app.ts',
@@ -215,16 +216,17 @@ describe('mirrored editor tab republication', () => {
     expect(applied.openFiles).toHaveLength(2)
     expect(applied.openFiles[0]).toBe(localFile)
     expect(applied.openFiles[1]).toMatchObject({
-      id: localFile.id,
+      id: buildOwnedEditorFileId(localFile.filePath, WT, ENV),
       runtimeEnvironmentId: ENV,
       mirroredFromRuntimeSession: true
     })
     expect(applied.unifiedTabsByWorktree[WT]).toMatchObject([
-      { id: 'peer-file-tab', entityId: localFile.id }
+      { id: 'a-own-tab', entityId: localFile.id },
+      { id: 'peer-file-tab', entityId: buildOwnedEditorFileId(localFile.filePath, WT, ENV) }
     ])
     expect(
       buildMobileSessionTabSnapshots(makePublicationState(applied), false)[0]?.tabs
-    ).toMatchObject([{ id: 'peer-file-tab', type: 'file', filePath: localFile.filePath }])
+    ).toMatchObject([{ id: 'a-own-tab', type: 'file', filePath: localFile.filePath }])
     const closed = {
       ...applied,
       ...applyWebSessionTabsSnapshot(
@@ -235,6 +237,8 @@ describe('mirrored editor tab republication', () => {
       )
     }
     expect(closed.openFiles).toEqual([localFile])
-    expect(closed.unifiedTabsByWorktree[WT]).toBeUndefined()
+    expect(closed.unifiedTabsByWorktree[WT]).toMatchObject([
+      { id: 'a-own-tab', entityId: localFile.id }
+    ])
   })
 })
