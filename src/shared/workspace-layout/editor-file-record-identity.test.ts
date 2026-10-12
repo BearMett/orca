@@ -187,6 +187,8 @@ describe('persisted editor record normalization', () => {
         files.map(({ readOnly, liveTail }) => [readOnly, liveTail])
       )
       expect(new Set(normalized.map((file) => editorFileRecordKey(file, WS))).size).toBe(3)
+      // Why: later views take a minted id, so they are flagged for the restore to give them a tab.
+      expect(normalized.map((file) => file.recoveredDraft)).toEqual([undefined, true, true])
       expect(
         preservePersistedEditorFileRecords(normalized, WS, () => {
           throw new Error('should not mint on restart')

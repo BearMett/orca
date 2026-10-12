@@ -165,7 +165,10 @@ describe('recovered editor drafts survive hot exit', () => {
     const views = (store: ReturnType<typeof hydrate>) =>
       store
         .getState()
-        .openFiles.map((file) => [file.filePath, file.readOnly, file.liveTail])
+        .openFiles.filter((file) =>
+          store.getState().unifiedTabsByWorktree[WT]?.some((tab) => tab.entityId === file.id)
+        )
+        .map((file) => [file.filePath, file.readOnly, file.liveTail])
         .sort()
     let store = hydrate({
       ...getDefaultWorkspaceSession(),
