@@ -319,7 +319,6 @@
 1 src/renderer/src/lib/default-creation-host.ts # the sanctioned reader of the default host
 1 src/renderer/src/lib/doc-preview-grants.ts
 1 src/renderer/src/lib/empty-workspace-default-agent-chat.ts
-3 src/renderer/src/lib/execute-open-editor-path-move.ts
 1 src/renderer/src/lib/execution-host-display-label.ts
 2 src/renderer/src/lib/execution-host-facts.ts
 6 src/renderer/src/lib/file-preview.ts
@@ -338,7 +337,6 @@
 1 src/renderer/src/lib/local-preflight-context.ts
 3 src/renderer/src/lib/open-agent-message-sender.ts
 2 src/renderer/src/lib/provider-runtime-context.ts
-2 src/renderer/src/lib/remap-open-editor-tabs-for-path-change.ts
 1 src/renderer/src/lib/remote-workspace-drop-test-fixtures.ts
 2 src/renderer/src/lib/repo-runtime-owner.ts
 2 src/renderer/src/lib/resume-sleeping-agent-session.ts
