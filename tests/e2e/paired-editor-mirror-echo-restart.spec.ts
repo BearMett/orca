@@ -119,7 +119,10 @@ test('client holding a mirror survives a real quit/relaunch without republishing
       const parsed = parseWorkspaceSessionSalvaging(readPartitions(userDataDir)[hits[0].partition])
       expect(parsed.ok, `${label}: partition failed the load validator`).toBe(true)
       if (parsed.ok) {
-        expect(parsed.droppedCount, `${label}: validator dropped ${parsed.droppedPaths}`).toBe(0)
+        expect(
+          parsed.droppedCount,
+          `${label}: validator dropped ${parsed.droppedPaths.join(', ')}`
+        ).toBe(0)
         const validated = parsed.value.openFilesByWorktree?.[hits[0].key]?.find((row) =>
           row.filePath.endsWith(INDEX_SUFFIX)
         )
