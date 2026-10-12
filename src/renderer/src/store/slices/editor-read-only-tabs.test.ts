@@ -147,7 +147,9 @@ describe('read-only editor tabs (AI Vault View Log)', () => {
     const store = createEditorStore()
     store.setState({
       worktreesByRepo: { 'repo-1': [{ id: 'wt-1' }] },
-      folderWorkspaces: []
+      folderWorkspaces: [],
+      unifiedTabsByWorktree: {},
+      groupsByWorktree: {}
     } as never)
 
     store.getState().hydrateEditorSession({

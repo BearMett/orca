@@ -166,6 +166,9 @@ describe('buildWorkspaceSessionPayload', () => {
     expect(payload.openFilesByWorktree).toEqual({
       'wt-1': [
         {
+          // Why: the persisted id is the record's stable identity across owners (see
+          // persisted-editor-file-records); a local, unstamped file keeps its path as id.
+          id: '/tmp/demo.ts',
           filePath: '/tmp/demo.ts',
           relativePath: 'demo.ts',
           worktreeId: 'wt-1',
