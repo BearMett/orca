@@ -469,30 +469,29 @@ describe('cross-version session-tabs editor mirror', () => {
         })
       )
 
-      // The echo lands on the host that owns the file: two rows share the bare id, and the
-      // host's own unified tab is replaced by the peer's tab id.
+      // The echo lands on the host that owns the file: its own row is kept, but its own tab is
+      // regrouped and stamped as owned by the old peer, and it still publishes.
+      const foreignTab = {
+        id: echoTabId,
+        entityId: localFile.id,
+        groupId: `web-session-tabs:${WT}`,
+        executionHostId: `runtime:${ENV_B}`
+      }
       const a1 = applyFrame(stack, a0, echoFrame, ENV_B, NOW + 1)
-      expect(worktreeFiles(a1)).toHaveLength(2)
-      expect(a1.openFiles[0]).toBe(localFile)
-      expect(a1.openFiles[1]).toMatchObject({
-        id: localFile.id,
-        runtimeEnvironmentId: ENV_B,
-        mirroredFromRuntimeSession: true
-      })
-      expect(editorTabs(a1)).toMatchObject([{ id: echoTabId, entityId: localFile.id }])
-      // First-wins indexing republishes the local row under the peer's tab id; characterized
-      // here, deduped on write by #21124 rather than by this fix.
+      expect(worktreeFiles(a1)).toEqual([localFile])
+      expect(editorTabs(a1)).toMatchObject([foreignTab])
       expect(fileTabs(publishWorktree(stack, a1))).toMatchObject([
         { id: echoTabId, filePath: FILE_PATH }
       ])
 
-      // The old peer's user closes the mirror; its next real frame omits it.
+      // The old peer's user closes the mirror; its next real frame omits it, and the host's
+      // tab survives with the peer's stamp.
       const omitFrame = publishWorktree(old, peerClosedMirror(oldB))
       expect(omitFrame.tabs).toEqual([])
       expect(omitFrame.snapshotVersion).toBeGreaterThan(echoFrame.snapshotVersion)
       const a2 = applyFrame(stack, a1, omitFrame, ENV_B, NOW + 2)
       expect(worktreeFiles(a2)).toEqual([localFile])
-      expect(a2.unifiedTabsByWorktree[WT]).toBeUndefined()
+      expect(editorTabs(a2)).toMatchObject([foreignTab])
     }
   )
 
