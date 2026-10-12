@@ -4,6 +4,7 @@
 
 import type { TabGroup } from '../tab-types'
 import type { LayoutGroup } from './workspace-layout-model'
+import { resolveTabGroupOwners } from './tab-group-ownership'
 
 export type OrderCandidate = {
   id: string
@@ -27,6 +28,7 @@ export function resolveGroupOrder(args: {
   mintId: (seed: string) => string
 }): LayoutGroup[] {
   const known = new Set(args.candidates.map((candidate) => candidate.id))
+  const owners = resolveTabGroupOwners(args.candidates, args.storedGroups)
   const placed = new Set<string>()
   const groups: LayoutGroup[] = []
   for (const stored of args.storedGroups) {
@@ -35,7 +37,7 @@ export function resolveGroupOrder(args: {
     }
     const tabOrder: string[] = []
     for (const tabId of stored.tabOrder) {
-      if (known.has(tabId) && !placed.has(tabId)) {
+      if (known.has(tabId) && owners.get(tabId) === stored.id && !placed.has(tabId)) {
         placed.add(tabId)
         tabOrder.push(tabId)
       }

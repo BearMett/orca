@@ -6,16 +6,15 @@ import {
   adoptGrouplessTabs,
   appendOwnedTabIdsToGroups,
   layoutSpanningGroups,
-  resolveTabGroupOwners
+  resolveTabGroupOwners,
+  restrictGroupToOwnedTabs
 } from './tab-group-reference-repair'
 import {
   dedupeEditorTabsWithinGroups,
   getPersistedEditFileIdsByWorktree,
   canRestorePersistedTab,
-  sanitizeRecentTabIds,
   selectHydratedActiveGroupId
 } from './tab-group-state'
-import { dedupeTabOrder } from '../../../../shared/workspace-layout/tab-order'
 
 type HydratedTabState = {
   unifiedTabsByWorktree: Record<string, Tab[]>
@@ -137,36 +136,9 @@ function hydrateUnifiedFormat(
     const hydratedTabsForWorktree = tabsByWorktree[worktreeId] ?? []
     const tabIdAliasesByGroup = tabIdAliasesByWorktree[worktreeId]
     const tabOwners = resolveTabGroupOwners(hydratedTabsForWorktree, groups, tabIdAliasesByGroup)
-    const validatedGroups = appendOwnedTabIdsToGroups(groups, tabOwners).map((g) => {
-      const tabIdAliases = tabIdAliasesByGroup?.get(g.id)
-      const canonicalTabId = (tabId: string): string => tabIdAliases?.get(tabId) ?? tabId
-      // Why: persisted tabOrder can contain duplicates from older buggy
-      // writes. Deduping during hydration restores the store invariant before
-      // later group operations branch on tab counts or neighbors.
-      const tabOrder = dedupeTabOrder(
-        g.tabOrder.map(canonicalTabId).filter((tid) => tabOwners.get(tid) === g.id)
-      )
-      const canonicalActiveTabId = g.activeTabId ? canonicalTabId(g.activeTabId) : null
-      const activeTabId =
-        canonicalActiveTabId && tabOwners.get(canonicalActiveTabId) === g.id
-          ? canonicalActiveTabId
-          : null
-      // Why: persisted MRU may reference tabs that no longer exist. Sanitize
-      // against the live tabOrder, then ensure the current active tab sits at
-      // the tail so the first close after restore jumps back to the previous
-      // tab rather than falling through to neighbor selection.
-      const sanitizedRecent = sanitizeRecentTabIds(g.recentTabIds?.map(canonicalTabId), tabOrder)
-      const recentTabIds =
-        activeTabId && sanitizedRecent.at(-1) !== activeTabId
-          ? [...sanitizedRecent.filter((id) => id !== activeTabId), activeTabId]
-          : sanitizedRecent
-      return {
-        ...g,
-        tabOrder,
-        activeTabId,
-        recentTabIds
-      }
-    })
+    const validatedGroups = appendOwnedTabIdsToGroups(groups, tabOwners).map((group) =>
+      restrictGroupToOwnedTabs(group, tabOwners, tabIdAliasesByGroup?.get(group.id))
+    )
     const hydratedGroups = validatedGroups.filter((group, index) => {
       const hadTabsBeforeHydration = groups[index]?.tabOrder.length > 0
       if (group.tabOrder.length > 0) {

@@ -220,23 +220,31 @@ export function dedupeEditorTabsWithinGroups(tabs: Tab[]): {
   tabIdAliasesByGroup: Map<string, Map<string, string>>
 } {
   const tabIdAliasesByGroup = new Map<string, Map<string, string>>()
-  const editorTabIdByGroupAndEntity = new Map<string, Map<string, string>>()
-  const dedupedTabs = dedupeTabsById(tabs).filter((tab) => {
+  const canonicalByGroup = new Map<string, Map<string, Tab>>()
+  const uniqueTabs = dedupeTabsById(tabs)
+  for (const tab of uniqueTabs) {
+    if (tab.contentType !== 'editor') {
+      continue
+    }
+    const canonicalByEntity = canonicalByGroup.get(tab.groupId) ?? new Map<string, Tab>()
+    canonicalByGroup.set(tab.groupId, canonicalByEntity)
+    const previous = canonicalByEntity.get(tab.entityId)
+    if (!previous || (tab.isPinned && !previous.isPinned)) {
+      canonicalByEntity.set(tab.entityId, tab)
+    }
+  }
+  const dedupedTabs = uniqueTabs.filter((tab) => {
     if (tab.contentType !== 'editor') {
       return true
     }
-    const editorTabIdByEntity =
-      editorTabIdByGroupAndEntity.get(tab.groupId) ?? new Map<string, string>()
-    editorTabIdByGroupAndEntity.set(tab.groupId, editorTabIdByEntity)
-    const existingTabId = editorTabIdByEntity.get(tab.entityId)
-    if (existingTabId !== undefined) {
-      const tabIdAliases = tabIdAliasesByGroup.get(tab.groupId) ?? new Map<string, string>()
-      tabIdAliasesByGroup.set(tab.groupId, tabIdAliases)
-      tabIdAliases.set(tab.id, existingTabId)
-      return false
+    const canonical = canonicalByGroup.get(tab.groupId)?.get(tab.entityId)
+    if (!canonical || canonical.id === tab.id) {
+      return true
     }
-    editorTabIdByEntity.set(tab.entityId, tab.id)
-    return true
+    const aliases = tabIdAliasesByGroup.get(tab.groupId) ?? new Map<string, string>()
+    tabIdAliasesByGroup.set(tab.groupId, aliases)
+    aliases.set(tab.id, canonical.id)
+    return false
   })
   return { tabs: dedupedTabs, tabIdAliasesByGroup }
 }
