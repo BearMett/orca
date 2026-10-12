@@ -1,8 +1,5 @@
-import { getLocalPtyProvider, rebindLocalProviderListeners } from '../ipc/pty'
-import {
-  confirmSeededClaudeLivePtys,
-  hasSeededUnconfirmedClaudePtys
-} from '../claude-accounts/live-pty-gate'
+import { getLocalPtyProvider } from '../ipc/pty/provider/registry'
+import { rebindLocalProviderListeners } from '../ipc/pty/provider/listener-lifecycle'
 import { isStartupDiagnosticsEnabled, logStartupDiagnostic } from '../startup/startup-diagnostics'
 import { checkDaemonHealth } from './daemon-health'
 import { collectPinnedDaemonVersions, pruneOldDaemonHosts } from './daemon-host-relocation'
@@ -13,13 +10,18 @@ import {
 } from './daemon-endpoint-adoption'
 import { createLegacyDaemonAdapters } from './daemon-legacy-adapters'
 import {
+  discoverNewerProtocolHolds,
+  isHoldingForNewerProtocolDaemon
+} from './daemon-newer-protocol-hold'
+import {
   getDaemonHistoryDir as getHistoryDir,
   getDaemonRuntimeDir as getRuntimeDir,
   resolvePackagedDarwinAppVersion
 } from './daemon-launch-paths'
 import {
   attributeNextDaemonReplacement,
-  createOutOfProcessLauncher
+  createOutOfProcessLauncher,
+  type DaemonLaunchPolicy
 } from './daemon-out-of-process-launcher'
 import type { DaemonProvider } from './daemon-provider-routing'
 import { installDaemonProvider } from './daemon-provider-state'
@@ -46,7 +48,7 @@ function logDaemonMilestone(event: string, details: Record<string, unknown> = {}
 
 export async function initDaemonPtyProvider(
   signal?: AbortSignal,
-  options: { macosLoginSessionWatch?: boolean } = {}
+  options: DaemonLaunchPolicy = {}
 ): Promise<void> {
   logDaemonMilestone('daemon-init-start')
   // Why: e2e coverage for the startup PTY gate (#5232) needs a daemon init that deterministically outlasts the first-window timeout.
@@ -58,7 +60,7 @@ export async function initDaemonPtyProvider(
 
   const newSpawner = new DaemonSpawner({
     runtimeDir,
-    launcher: createOutOfProcessLauncher(runtimeDir, options.macosLoginSessionWatch ?? false)
+    launcher: createOutOfProcessLauncher(runtimeDir, options)
   })
 
   // Why: assign the module-level spawner/adapter only after both succeed, so a failed ensureRunning() leaves no stale spawner.
@@ -118,7 +120,12 @@ export async function initDaemonPtyProvider(
     await newAdapter.establishLifecycleLease()
     releaseDaemonAdoptionLease(newSpawner.getHandle())
 
-    legacyAdapters = await createLegacyDaemonAdapters(runtimeDir)
+    // Why beside legacy discovery: older daemons are adopted, newer ones only hold their tabs.
+    const [discoveredLegacyAdapters] = await Promise.all([
+      createLegacyDaemonAdapters(runtimeDir),
+      discoverNewerProtocolHolds(runtimeDir)
+    ])
+    legacyAdapters = discoveredLegacyAdapters
     routedAdapter =
       launchMode === 'degraded-new-pty-fallback'
         ? new DegradedDaemonPtyProvider({
@@ -128,7 +135,7 @@ export async function initDaemonPtyProvider(
             probeCurrentDaemonSpawn: async () =>
               (await checkDaemonHealth(info.socketPath, info.tokenPath)) === 'healthy'
           })
-        : legacyAdapters.length > 0
+        : legacyAdapters.length > 0 || isHoldingForNewerProtocolDaemon()
           ? new DaemonPtyRouter({
               current: newAdapter,
               legacy: legacyAdapters
@@ -162,7 +169,6 @@ export async function initDaemonPtyProvider(
   if (process.platform === 'darwin' && newSpawner.getHandle()?.adopted) {
     void reportDaemonAdoption(runtimeDir, info.socketPath, info.tokenPath, newAdapter)
   }
-  await reconcileSeededClaudeLivePtys(routedAdapter)
 }
 
 // Why off the init path: this is measurement of an adopted daemon (#17696), and neither its probes nor their failure may delay or fail startup.
@@ -187,31 +193,5 @@ async function reportDaemonAdoption(
     )
   } catch {
     // Best-effort measurement only.
-  }
-}
-
-// Why: release gate ids only for daemon-confirmed-dead sessions; keep seeds on listing failure since releasing early can rotate a live CLI's refresh token.
-async function reconcileSeededClaudeLivePtys(provider: DaemonProvider): Promise<void> {
-  if (!hasSeededUnconfirmedClaudePtys()) {
-    return
-  }
-  try {
-    const adapters =
-      provider instanceof DaemonPtyRouter || provider instanceof DegradedDaemonPtyProvider
-        ? provider.getAllAdapters()
-        : [provider]
-    const results = await Promise.allSettled(adapters.map((entry) => entry.listSessions()))
-    if (results.some((result) => result.status === 'rejected')) {
-      console.warn('[daemon] Keeping seeded Claude live-PTY gate — session listing failed')
-      return
-    }
-    confirmSeededClaudeLivePtys(
-      results.flatMap((result) =>
-        result.status === 'fulfilled' ? result.value.map((session) => session.sessionId) : []
-      )
-    )
-  } catch (error) {
-    // Why: gate bookkeeping must never fail daemon init; stale seeds only defer a usage refresh until next restart.
-    console.warn('[daemon] Failed to reconcile seeded Claude live-PTY gate:', error)
   }
 }

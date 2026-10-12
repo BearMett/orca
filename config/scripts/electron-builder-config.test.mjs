@@ -47,6 +47,27 @@ describe('electron-builder config', () => {
     )
   })
 
+  it('keeps release build staging out of app.asar while preserving runtime output', () => {
+    const matcher = new FileMatcher('/app', '/dest', (value) => value, electronBuilderConfig.files)
+    matcher.prependPattern('**/*')
+    const isPacked = matcher.createFilter()
+    expect(isPacked(join('/app', '.build'), { isDirectory: () => true })).toBe(false)
+    for (const stagingPath of [
+      '.build/release-javascript/release-javascript.tar.gz',
+      '.build/release-javascript/manifest.json',
+      '.build/release-javascript-123/out/main/index.js'
+    ]) {
+      expect(isPacked(join('/app', stagingPath), { isDirectory: () => false })).toBe(false)
+    }
+    for (const runtimePath of [
+      'out/main/index.js',
+      'out/cli/index.js',
+      'out/renderer/index.html'
+    ]) {
+      expect(isPacked(join('/app', runtimePath), { isDirectory: () => false })).toBe(true)
+    }
+  })
+
   it('keeps local agent tooling out of app.asar', () => {
     const matcher = new FileMatcher('/app', '/dest', (value) => value, electronBuilderConfig.files)
     matcher.prependPattern('**/*')
@@ -336,6 +357,28 @@ describe('electron-builder config', () => {
     expect(viteConfig).toMatch(new RegExp(`'${entryFilename.replace(/\.js$/, '')}':\\s*resolve\\(`))
   })
 
+  // Why: the CLI runs this entry under ELECTRON_RUN_AS_NODE, which cannot read
+  // app.asar, so a packed copy sends every `orca serve` to Electron (#27307).
+  it('unpacks the orcad serve-selection entry the CLI runs', async () => {
+    const sharedSource = await readFile(
+      join(REPO_ROOT, 'src', 'shared', 'orcad-local-serve-selection.ts'),
+      'utf8'
+    )
+    const entryName = sharedSource.match(/ORCAD_LOCAL_SERVE_SELECTION_ENTRY = '([^']+)'/)?.[1]
+    expect(entryName).toBeDefined()
+
+    const matcher = new FileMatcher(
+      '/app',
+      '/dest',
+      (value) => value,
+      electronBuilderConfig.asarUnpack
+    )
+    const isUnpacked = matcher.createFilter()
+    expect(
+      isUnpacked(join('/app', 'out', 'main', `${entryName}.js`), { isDirectory: () => false })
+    ).toBe(true)
+  })
+
   // Why: the scanner service is forked with ELECTRON_RUN_AS_NODE, so asar is
   // invisible to it and a packed worker entry fails closed — dropping every
   // OpenCode session in packaged builds while dev stays green. Three legs must
@@ -561,7 +604,11 @@ describe('arch-aware packaging guard', () => {
   })
 
   const packHost = (arch) =>
-    electronBuilderConfig.beforePack({ electronPlatformName: process.platform, arch }, bundleDir)
+    electronBuilderConfig.beforePack(
+      { electronPlatformName: process.platform, arch },
+      bundleDir,
+      () => undefined
+    )
 
   it('allows packaging the host platform and architecture', () => {
     expect(() => packHost(HOST_ARCH)).not.toThrow()

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { PtyProcessCeilingState } from './pty-process-ceiling-state'
 import {
   constants,
   copyFileSync,
@@ -10,6 +11,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { PROTOCOL_VERSION } from './types'
+import { resolveDaemonUnixSocketPath } from './daemon-socket-endpoint-path'
 import { DaemonCrashLoopError, DaemonRespawnThrottle } from './daemon-respawn-throttle'
 
 export type DaemonConnectionInfo = {
@@ -31,6 +33,8 @@ export type DaemonPidFile = {
    *  `null` when it detected none. Absent on records no daemon wrote (adoption) or that predate
    *  durable-scope launching. */
   cgroupUnit?: string | null
+  /** Whether this daemon's terminals run under an OS process ceiling, and why not when off. */
+  processCeiling?: PtyProcessCeilingState
 }
 
 export type DaemonProcessHandle = {
@@ -136,7 +140,7 @@ export function getDaemonSocketPath(
     const suffix = createHash('sha256').update(runtimeDir).digest('hex').slice(0, 12)
     return `\\\\?\\pipe\\orca-terminal-host-v${protocolVersion}-${suffix}`
   }
-  return join(runtimeDir, `daemon-v${protocolVersion}.sock`)
+  return resolveDaemonUnixSocketPath(runtimeDir, `daemon-v${protocolVersion}.sock`)
 }
 
 export function getDaemonTokenPath(runtimeDir: string, protocolVersion = PROTOCOL_VERSION): string {
