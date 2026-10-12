@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as AgentStatusModule from '@/lib/agent-status'
 import {
   LOCAL_EXECUTION_HOST_ID,
-  toRuntimeExecutionHostId
+  toRuntimeExecutionHostId,
+  toSshExecutionHostId,
+  type ExecutionHostId
 } from '../../../../shared/execution-host'
 import type { Tab } from '../../../../shared/tab-types'
 import type {
@@ -14,7 +16,8 @@ import type {
 import { loadWorkspaceLayout } from '../../../../shared/workspace-layout/workspace-layout-load'
 import { nameBasedLoadContext } from '../../../../shared/workspace-layout/workspace-layout-minted-ids'
 import { saveWorkspaceLayout } from '../../../../shared/workspace-layout/workspace-layout-save'
-import { buildEditorSessionData } from '../../lib/workspace-session'
+import { buildEditorSessionData, buildWorkspaceSessionPayload } from '../../lib/workspace-session'
+import { reconcileHydratedWorkspaceTabModels } from '../../app-shell/reconcile-hydrated-workspace-tab-models'
 import { buildOwnedEditorFileId } from './editor/file-ids/editor-file-ids'
 import { createStoreSessionMockApi } from './store-session-test-harness'
 import { createTestStore, makeWorktree } from './store-test-helpers'
@@ -213,4 +216,107 @@ describe('extra: a runtime-owned editor tab names its file by owned id, not path
 
     expect(remoteFile(sharedSave(stored))?.isPreview).toBe(remoteFile(stored)?.isPreview)
   })
+})
+
+const OTHER_PATH = '/workspace/src/other.ts'
+
+/** A pinned, selected tab naming a legacy owned draft by its raw path, as pre-owned-id windows saved it. */
+function legacyOwnedDraftSession(
+  owner: Partial<PersistedOpenFile>,
+  executionHostId: ExecutionHostId
+): WorkspaceSessionState {
+  return {
+    ...twinSession([]),
+    openFilesByWorktree: {
+      [KEY]: [
+        // Listed first so a dropped selection cannot fall back onto the draft by accident.
+        {
+          filePath: OTHER_PATH,
+          relativePath: 'src/other.ts',
+          worktreeId: KEY,
+          language: 'typescript'
+        },
+        {
+          filePath: FILE_PATH,
+          relativePath: 'src/app.ts',
+          worktreeId: KEY,
+          language: 'typescript',
+          ...owner,
+          dirtyDraftContent: 'legacy draft',
+          lastKnownDiskSignature: 'sig'
+        }
+      ]
+    },
+    unifiedTabs: {
+      [KEY]: [
+        editorTab('tab-other', { entityId: OTHER_PATH, executionHostId: LOCAL_EXECUTION_HOST_ID }),
+        editorTab('tab-legacy', {
+          entityId: FILE_PATH,
+          executionHostId,
+          isPinned: true,
+          sortOrder: 1
+        })
+      ]
+    },
+    tabGroups: {
+      [KEY]: [
+        {
+          id: 'group-1',
+          worktreeId: KEY,
+          activeTabId: 'tab-legacy',
+          tabOrder: ['tab-other', 'tab-legacy']
+        }
+      ]
+    },
+    activeFileIdByWorktree: { [KEY]: FILE_PATH },
+    activeTabTypeByWorktree: { [KEY]: 'editor' }
+  }
+}
+
+// Mirrors use-app-startup-hydration.ts: four hydrators, then the boot reconcile.
+function boot(session: WorkspaceSessionState) {
+  const store = prepareStore()
+  store.getState().hydrateWorkspaceSession(session)
+  store.getState().hydrateTabsSession(session)
+  store.getState().hydrateEditorSession(session)
+  store.getState().hydrateBrowserSession(session)
+  reconcileHydratedWorkspaceTabModels(session, store.getState().reconcileWorktreeTabModels)
+  return store
+}
+
+function expectLegacyDraftView(store: ReturnType<typeof boot>) {
+  const state = store.getState()
+  const draftFiles = state.openFiles.filter((file) => file.filePath === FILE_PATH)
+  expect(draftFiles).toHaveLength(1)
+  const file = draftFiles[0]
+  expect(state.editorDrafts[file.id]).toBe('legacy draft')
+  expect(
+    state.unifiedTabsByWorktree[KEY]?.map((tab) => [tab.id, tab.entityId, tab.isPinned ?? false])
+  ).toEqual([
+    ['tab-other', OTHER_PATH, false],
+    ['tab-legacy', file.id, true]
+  ])
+  expect(state.groupsByWorktree[KEY]?.[0]?.activeTabId).toBe('tab-legacy')
+  expect(state.activeFileIdByWorktree[KEY]).toBe(file.id)
+}
+
+describe('blocker 1: a legacy owned draft keeps its tab, pin and selection after the shared loader ids it', () => {
+  const OWNERS: [string, Partial<PersistedOpenFile>, ExecutionHostId][] = [
+    ['runtime-owned', { runtimeEnvironmentId: REMOTE_ENV }, toRuntimeExecutionHostId(REMOTE_ENV)],
+    ['external-SSH-owned', { externalSshTargetId: 'ssh-1' }, toSshExecutionHostId('ssh-1')]
+  ]
+
+  it.each(OWNERS)('%s: renderer boot of the stored session', (_name, owner, hostId) => {
+    expectLegacyDraftView(boot(legacyOwnedDraftSession(owner, hostId)))
+  })
+
+  it.each(OWNERS)(
+    '%s: renderer boot of the shared save, then another save and restart',
+    (_name, owner, hostId) => {
+      const first = boot(sharedSave(legacyOwnedDraftSession(owner, hostId)))
+      expectLegacyDraftView(first)
+      const persisted = JSON.parse(JSON.stringify(buildWorkspaceSessionPayload(first.getState())))
+      expectLegacyDraftView(boot(sharedSave(persisted)))
+    }
+  )
 })

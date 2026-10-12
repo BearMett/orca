@@ -67,10 +67,20 @@ export function loadEditorFiles(
       // Loaded tabs are fresh copies, so this touches no stored data.
       delete tab.isPreview
     }
-    return {
-      ...omitStoredFields(file, [...EDITOR_DRAFT_FIELDS, 'isPreview', 'worktreeId']),
-      ...(Object.keys(draft).length > 0 && !file.id ? { id: editorFileRecordKey(file, key) } : {})
+    if (Object.keys(draft).length === 0 || file.id) {
+      return omitStoredFields(file, [...EDITOR_DRAFT_FIELDS, 'isPreview', 'worktreeId'])
     }
+    const id = editorFileRecordKey(file, key)
+    // Why: readers migrate raw-path references only for records without an id, so they move with it.
+    for (const tab of fileTabs) {
+      tab.entityId = id
+    }
+    const selection = view.activeFileIdByWorktree
+    const selected = selection?.[key]
+    if (selection && selected && resolveEditorFileRecord(retained, selected, key) === file) {
+      selection[key] = id
+    }
+    return { ...omitStoredFields(file, [...EDITOR_DRAFT_FIELDS, 'isPreview', 'worktreeId']), id }
   })
 }
 
