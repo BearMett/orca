@@ -123,7 +123,8 @@ describe('recovered editor drafts survive hot exit', () => {
           fromPath: PATH,
           toPath: '/workspace/renamed.txt',
           worktreePath: '/workspace',
-          worktreeId: WT
+          worktreeId: WT,
+          operationOwner: { runtimeEnvironmentId: null, sshTargetId: null }
         }).ok
       ).toBe(true)
       expect(

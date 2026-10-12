@@ -17,6 +17,16 @@ import { executeOpenEditorPathMove } from './execute-open-editor-path-move'
 import { __activeEditorPathMoveCountForTests } from '@/components/editor/editor-path-move-inflight'
 import { getDiskBaselineSignature } from '@/components/editor/diff-content-signature'
 import { buildEditorExternalWatchEventHandler as createExternalWatchEventHandler } from '@/hooks/editor-external-watch-event-reconciliation'
+import { requestEditorSaveQuiesce } from '@/components/editor/editor-autosave'
+import {
+  SAME_PATH_FROM,
+  SAME_PATH_OWNER_IDS,
+  SAME_PATH_TO,
+  SAME_PATH_WORKTREE_ID,
+  expectOnlyOwnerMoved,
+  seedSamePathEditorOwners,
+  type SamePathOwner
+} from './same-path-editor-owners-test-fixture'
 
 const CONTEXT = {
   target: { kind: 'local' as const },
@@ -249,6 +259,40 @@ describe('executeOpenEditorPathMove', () => {
       documentPath: '/repo/b.md'
     })
   })
+
+  it.each([
+    ['local', { target: { kind: 'local' } }],
+    ['runtime', { target: { kind: 'environment', environmentId: 'env-1' } }],
+    [
+      'ssh',
+      {
+        target: { kind: 'local' },
+        connectionId: 'ssh-x',
+        expectedExecutionHostId: 'ssh:ssh-x',
+        expectedSshTargetId: 'ssh-x'
+      }
+    ]
+  ] as const)(
+    'quiesces and moves only the %s-owned record of a shared path',
+    async (owner: SamePathOwner, route) => {
+      seedSamePathEditorOwners()
+      vi.mocked(requestEditorSaveQuiesce).mockClear()
+
+      await executeOpenEditorPathMove({
+        context: { ...route, worktreeId: SAME_PATH_WORKTREE_ID, worktreePath: '/ws' },
+        fromPath: SAME_PATH_FROM,
+        toPath: SAME_PATH_TO,
+        worktreeId: SAME_PATH_WORKTREE_ID,
+        worktreePath: '/ws'
+      })
+
+      expect(vi.mocked(requestEditorSaveQuiesce).mock.calls).toEqual([
+        [{ fileId: SAME_PATH_OWNER_IDS[owner] }]
+      ])
+      expectOnlyOwnerMoved(owner)
+      expect(__activeEditorPathMoveCountForTests()).toBe(0)
+    }
+  )
 
   it('leaves the store untouched and settles the transaction when the rename fails', async () => {
     openDirtyTab()

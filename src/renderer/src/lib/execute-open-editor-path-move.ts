@@ -1,20 +1,15 @@
 import { useAppStore } from '@/store'
 import { renameRuntimePath, type RuntimeFileOperationArgs } from '@/runtime/runtime-file-client'
+import { runtimeTargetEnvironmentId } from '@/runtime/runtime-client-target'
 import { requestEditorSaveQuiesce } from '@/components/editor/editor-autosave'
 import {
   beginEditorPathMove,
   settleEditorPathMove
 } from '@/components/editor/editor-path-move-inflight'
-import {
-  isPathInsideOrEqual,
-  remapOpenEditorTabsForPathChange
-} from '@/lib/remap-open-editor-tabs-for-path-change'
+import { remapOpenEditorTabsForPathChange } from '@/lib/remap-open-editor-tabs-for-path-change'
+import { selectOpenFilesForPathMove } from '@/lib/open-editor-path-move-selection'
 import { verifyLatchedMoveDestinations } from '@/hooks/useEditorExternalWatch'
 import { notifyHostOfMirroredEditorClose } from '@/runtime/close-mirrored-editor-tab'
-import {
-  getExecutionHostIdForWorktree,
-  getRuntimeEnvironmentIdForWorktree
-} from '@/lib/worktree-runtime-owner'
 import { documentFolderAccess } from '@/lib/local-file-access'
 
 let moveOperationCounter = 0
@@ -38,15 +33,13 @@ export async function executeOpenEditorPathMove(args: {
   const { context, fromPath, toPath, worktreeId, worktreePath } = args
   const operationId = `editor-move-${(moveOperationCounter += 1)}`
 
-  // Host-scoped: the same abs path on another host (2nd SSH connection, local vs
-  // runtime) is a distinct file the rename never touched — keep it out of the move.
+  // The rename runs on the context's host, so only files that host backs take part.
+  const operationOwner = {
+    runtimeEnvironmentId: runtimeTargetEnvironmentId(context.target),
+    sshTargetId: context.expectedSshTargetId?.trim() || null
+  }
   const moveState = useAppStore.getState()
-  const initiatingHostId = getExecutionHostIdForWorktree(moveState, worktreeId)
-  const affected = moveState.openFiles.filter(
-    (f) =>
-      isPathInsideOrEqual(fromPath, f.filePath) &&
-      getExecutionHostIdForWorktree(moveState, f.worktreeId) === initiatingHostId
-  )
+  const affected = selectOpenFilesForPathMove(moveState, fromPath, worktreeId, operationOwner)
 
   // Suppress the move ROOT (prefix-matched) per scope, always including the
   // initiating one, so a file opened UNDER a moving dir mid-rename is covered
@@ -56,7 +49,7 @@ export async function executeOpenEditorPathMove(args: {
   const addScope = (wtId: string, owner: string | null): void => {
     scopes.set(`${wtId}::${owner ?? 'local'}`, { worktreeId: wtId, owner })
   }
-  addScope(worktreeId, getRuntimeEnvironmentIdForWorktree(moveState, worktreeId))
+  addScope(worktreeId, operationOwner.runtimeEnvironmentId)
   for (const f of affected) {
     addScope(f.worktreeId, f.runtimeEnvironmentId?.trim() || null)
   }
@@ -107,6 +100,7 @@ export async function executeOpenEditorPathMove(args: {
       toPath,
       worktreePath,
       worktreeId,
+      operationOwner,
       moveOperationId: operationId
     })
     if (!rekeyResult.ok) {

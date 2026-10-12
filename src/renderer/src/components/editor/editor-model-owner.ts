@@ -3,32 +3,57 @@ import {
   resolveWorktreeOperationRoute,
   type WorktreeOperationRouteState
 } from '@/lib/worktree-operation-route'
-import { toRuntimeExecutionHostId, toSshExecutionHostId } from '../../../../shared/execution-host'
+import {
+  toRuntimeExecutionHostId,
+  toSshExecutionHostId,
+  type ExecutionHostId
+} from '../../../../shared/execution-host'
 
-export function getEditorModelOwnerKey(file: OpenFile, state: WorktreeOperationRouteState): string {
+/** The host whose disk backs an open file; `executionHostId: null` means unresolved. */
+export type EditorFileBackingHost = {
+  runtimeEnvironmentId: string | null
+  executionHostId: ExecutionHostId | null
+}
+
+export function getEditorFileBackingHost(
+  file: Pick<
+    OpenFile,
+    'worktreeId' | 'runtimeEnvironmentId' | 'externalSshTargetId' | 'operationProvenance'
+  >,
+  state: WorktreeOperationRouteState
+): EditorFileBackingHost {
   const captured = file.operationProvenance?.generation.route
-  const route =
-    captured ??
-    resolveWorktreeOperationRoute(
-      state.activeWorktreeId === file.worktreeId ? { ...state, activeWorktreeId: null } : state,
-      file.worktreeId
-    )
-  const environmentId = captured
-    ? captured.runtimeEnvironmentId
-    : file.runtimeEnvironmentId !== undefined
+  if (captured) {
+    return {
+      runtimeEnvironmentId: captured.runtimeEnvironmentId,
+      executionHostId: captured.executionHostId
+    }
+  }
+  const route = resolveWorktreeOperationRoute(
+    state.activeWorktreeId === file.worktreeId ? { ...state, activeWorktreeId: null } : state,
+    file.worktreeId
+  )
+  const environmentId =
+    file.runtimeEnvironmentId !== undefined
       ? file.runtimeEnvironmentId?.trim() || null
       : (route?.runtimeEnvironmentId ?? null)
-  const hostId = captured
-    ? captured.executionHostId
-    : file.externalSshTargetId
-      ? toSshExecutionHostId(file.externalSshTargetId)
-      : route &&
-          (file.runtimeEnvironmentId === undefined ||
-            (file.runtimeEnvironmentId || null) === route.runtimeEnvironmentId)
-        ? route.executionHostId
-        : environmentId
-          ? toRuntimeExecutionHostId(environmentId)
-          : null
+  const hostId = file.externalSshTargetId
+    ? toSshExecutionHostId(file.externalSshTargetId)
+    : route &&
+        (file.runtimeEnvironmentId === undefined ||
+          (file.runtimeEnvironmentId || null) === route.runtimeEnvironmentId)
+      ? route.executionHostId
+      : environmentId
+        ? toRuntimeExecutionHostId(environmentId)
+        : null
+  return { runtimeEnvironmentId: environmentId, executionHostId: hostId }
+}
+
+export function getEditorModelOwnerKey(file: OpenFile, state: WorktreeOperationRouteState): string {
+  const { runtimeEnvironmentId: environmentId, executionHostId: hostId } = getEditorFileBackingHost(
+    file,
+    state
+  )
   if (hostId === 'local' && !environmentId) {
     return ''
   }

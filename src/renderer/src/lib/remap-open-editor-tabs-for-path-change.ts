@@ -1,7 +1,10 @@
 import { useAppStore } from '@/store'
 import { detectLanguage } from '@/lib/language-detect'
 import { basename } from '@/lib/path'
-import { getExecutionHostIdForWorktree } from '@/lib/worktree-runtime-owner'
+import {
+  selectOpenFilesForPathMove,
+  type EditorPathMoveOwner
+} from '@/lib/open-editor-path-move-selection'
 import {
   buildDiffEditorFileId,
   buildOwnedEditorFileId,
@@ -10,17 +13,11 @@ import {
   type RekeyOpenFilesResult
 } from '@/store/slices/editor'
 import {
-  isPathInsideOrEqual,
   isWindowsAbsolutePathLike,
   normalizeRuntimePathSeparators,
   relativePathInsideRoot
 } from '../../../shared/cross-platform-path'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
-
-// Re-export the shared, flavor-aware containment check: move selection must fold
-// case + separators (Windows/UNC/WSL) so a same-file tab differing only in case
-// isn't missed and left stranded on the vanished source path after the rename.
-export { isPathInsideOrEqual }
 
 function isAbsolutePathLike(path: string): boolean {
   return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
@@ -192,26 +189,20 @@ export function remapOpenEditorTabsForPathChange({
   toPath,
   worktreePath,
   worktreeId,
+  operationOwner,
   moveOperationId
 }: {
   fromPath: string
   toPath: string
   worktreePath: string
   worktreeId?: string
+  operationOwner: EditorPathMoveOwner
   /** Passed by the move coordinator so dirty destinations get a content-verify
    * gate + provenance installed atomically with the re-home. */
   moveOperationId?: string
 }): RekeyOpenFilesResult {
   const state = useAppStore.getState()
-  // The rename only touched the initiating execution host. The same absolute
-  // path can be open on a DIFFERENT host (a second SSH connection, or local vs
-  // runtime) as a distinct physical file — never retarget those tabs.
-  const initiatingHostId = getExecutionHostIdForWorktree(state, worktreeId)
-  const filesToMove = state.openFiles.filter(
-    (file) =>
-      isPathInsideOrEqual(fromPath, file.filePath) &&
-      getExecutionHostIdForWorktree(state, file.worktreeId) === initiatingHostId
-  )
+  const filesToMove = selectOpenFilesForPathMove(state, fromPath, worktreeId, operationOwner)
   if (filesToMove.length === 0) {
     return { ok: true }
   }
