@@ -13,7 +13,8 @@ export function preservePersistedEditorFileRecords(
       file.filePath,
       file.runtimeEnvironmentId?.trim() || null,
       file.externalSshTargetId ?? null,
-      file.readOnly === true
+      file.readOnly === true,
+      file.readOnly === true && file.liveTail === true
     ])
     const indices = recordsByOwner.get(owner) ?? []
     const draft = file.readOnly ? undefined : file.dirtyDraftContent

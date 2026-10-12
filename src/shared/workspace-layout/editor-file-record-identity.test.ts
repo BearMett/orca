@@ -172,4 +172,26 @@ describe('persisted editor record normalization', () => {
       })
     ).toEqual([dirty])
   })
+
+  it('keeps writable, read-only and live-tail views of one path as separate records', () => {
+    const base = { ...record('file', null), id: undefined }
+    const plain = { ...base, dirtyDraftContent: undefined, lastKnownDiskSignature: undefined }
+    const readOnly = { ...plain, readOnly: true }
+    const liveTail = { ...readOnly, liveTail: true }
+    for (const files of [
+      [plain, readOnly, liveTail],
+      [liveTail, readOnly, plain]
+    ]) {
+      const normalized = preservePersistedEditorFileRecords(files, WS, (seed) => seed)
+      expect(normalized.map(({ readOnly, liveTail }) => [readOnly, liveTail])).toEqual(
+        files.map(({ readOnly, liveTail }) => [readOnly, liveTail])
+      )
+      expect(new Set(normalized.map((file) => editorFileRecordKey(file, WS))).size).toBe(3)
+      expect(
+        preservePersistedEditorFileRecords(normalized, WS, () => {
+          throw new Error('should not mint on restart')
+        })
+      ).toEqual(normalized)
+    }
+  })
 })

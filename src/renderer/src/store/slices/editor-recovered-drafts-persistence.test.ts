@@ -153,4 +153,35 @@ describe('recovered editor drafts survive hot exit', () => {
     expect(Object.values(store.getState().editorDrafts).sort()).toEqual(['ssh-one', 'ssh-two'])
     expect(signatures(hydrate(saved(store)))).toEqual(signatures(store))
   })
+
+  it('restores writable, read-only and live-tail views of one path as three files', () => {
+    const view = (flags: { readOnly?: true; liveTail?: true }) => ({
+      filePath: PATH,
+      relativePath: 'note.txt',
+      worktreeId: WT,
+      language: 'plaintext',
+      ...flags
+    })
+    const views = (store: ReturnType<typeof hydrate>) =>
+      store
+        .getState()
+        .openFiles.map((file) => [file.filePath, file.readOnly, file.liveTail])
+        .sort()
+    let store = hydrate({
+      ...getDefaultWorkspaceSession(),
+      openFilesByWorktree: {
+        [WT]: [view({ readOnly: true }), view({ readOnly: true, liveTail: true }), view({})]
+      }
+    })
+    const expected = [
+      [PATH, undefined, undefined],
+      [PATH, true, undefined],
+      [PATH, true, true]
+    ]
+    expect(views(store)).toEqual(expected)
+    store = hydrate(
+      saveWorkspaceLayout(loadWorkspaceLayout('local', saved(store), nameBasedLoadContext()))
+    )
+    expect(views(store)).toEqual(expected)
+  })
 })
