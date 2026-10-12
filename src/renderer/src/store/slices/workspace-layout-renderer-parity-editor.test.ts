@@ -320,3 +320,113 @@ describe('blocker 1: a legacy owned draft keeps its tab, pin and selection after
     }
   )
 })
+
+/** A raw-path-id tab and an owned-id tab of one runtime-owned record, split or in one group. */
+function rawPathTabCollisionSession(sameGroup: boolean, dirty: boolean): WorkspaceSessionState {
+  const secondGroupId = sameGroup ? 'group-1' : 'group-2'
+  const runtimeHostId = toRuntimeExecutionHostId(REMOTE_ENV)
+  return {
+    ...twinSession([dirty ? REMOTE_DIRTY : { runtimeEnvironmentId: REMOTE_ENV }]),
+    unifiedTabs: {
+      [KEY]: [
+        editorTab(FILE_PATH, { entityId: FILE_PATH, executionHostId: runtimeHostId }),
+        editorTab(REMOTE_FILE_ID, {
+          entityId: REMOTE_FILE_ID,
+          executionHostId: runtimeHostId,
+          groupId: secondGroupId,
+          sortOrder: 1,
+          isPinned: true,
+          customLabel: 'pinned copy',
+          color: 'blue'
+        })
+      ]
+    },
+    tabGroups: {
+      [KEY]: sameGroup
+        ? [
+            {
+              id: 'group-1',
+              worktreeId: KEY,
+              activeTabId: FILE_PATH,
+              tabOrder: [FILE_PATH, REMOTE_FILE_ID]
+            }
+          ]
+        : [
+            { id: 'group-1', worktreeId: KEY, activeTabId: FILE_PATH, tabOrder: [FILE_PATH] },
+            {
+              id: 'group-2',
+              worktreeId: KEY,
+              activeTabId: REMOTE_FILE_ID,
+              tabOrder: [REMOTE_FILE_ID]
+            }
+          ]
+    },
+    tabGroupLayouts: {
+      [KEY]: sameGroup
+        ? { type: 'leaf', groupId: 'group-1' }
+        : {
+            type: 'split',
+            direction: 'horizontal',
+            first: { type: 'leaf', groupId: 'group-1' },
+            second: { type: 'leaf', groupId: 'group-2' }
+          }
+    }
+  }
+}
+
+/** Each group's editor views of the one open file: [group, pinned, label, colour], tab ids distinct. */
+function editorViewsByGroup(store: ReturnType<typeof boot>) {
+  const state = store.getState()
+  expect(state.openFiles).toHaveLength(1)
+  const tabs = state.unifiedTabsByWorktree[KEY] ?? []
+  expect(Object.values(state.editorDrafts)).toEqual(
+    state.openFiles[0]?.isDirty ? [REMOTE_DIRTY.dirtyDraftContent] : []
+  )
+  expect(new Set(tabs.map((tab) => tab.id)).size).toBe(tabs.length)
+  for (const group of state.groupsByWorktree[KEY] ?? []) {
+    expect(group.tabOrder).toEqual(
+      tabs.filter((tab) => tab.groupId === group.id).map((tab) => tab.id)
+    )
+    expect(group.activeTabId === null || group.tabOrder.includes(group.activeTabId)).toBe(true)
+  }
+  return tabs.map((tab) => {
+    expect(tab.entityId).toBe(state.openFiles[0]?.id)
+    return [tab.groupId, tab.isPinned ?? false, tab.customLabel, tab.color]
+  })
+}
+
+function restart(store: ReturnType<typeof boot>) {
+  return boot(JSON.parse(JSON.stringify(buildWorkspaceSessionPayload(store.getState()))))
+}
+
+describe('blocker 3: a migrated raw-path tab id cannot collapse split views or drop a pin', () => {
+  const ROUTES: [string, boolean, (session: WorkspaceSessionState) => WorkspaceSessionState][] = [
+    ['stored clean session', false, (session) => session],
+    ['shared save of a clean record', false, sharedSave],
+    ['stored draft session', true, (session) => session],
+    ['shared save of a draft record', true, sharedSave]
+  ]
+
+  it.each(ROUTES)('%s: views in two groups both survive restart', (_name, dirty, route) => {
+    const expected = [
+      ['group-1', false, null, null],
+      ['group-2', true, 'pinned copy', 'blue']
+    ]
+    const first = boot(route(rawPathTabCollisionSession(false, dirty)))
+    expect(editorViewsByGroup(first)).toEqual(expected)
+    expect(editorViewsByGroup(restart(first))).toEqual(expected)
+  })
+
+  it.each(ROUTES)(
+    '%s: one group keeps the pinned copy with its decoration',
+    (_name, dirty, route) => {
+      const expected = [['group-1', true, 'pinned copy', 'blue']]
+      const first = boot(route(rawPathTabCollisionSession(true, dirty)))
+      expect(editorViewsByGroup(first)).toEqual(expected)
+      expect(first.getState().groupsByWorktree[KEY]?.[0]?.activeTabId).toBe(
+        first.getState().unifiedTabsByWorktree[KEY]?.[0]?.id
+      )
+      expect(editorViewsByGroup(restart(first))).toEqual(expected)
+    }
+  )
+})

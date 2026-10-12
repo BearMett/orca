@@ -159,12 +159,18 @@ export function migrateHydratedEditorTabsAndGroups(
       continue
     }
     const tabIdMigrations = new Map<string, string>()
+    const migratesId = (tab: Tab): boolean =>
+      isEditorTabContentType(tab.contentType) && idMigrations.has(tab.id)
+    const claimedTabIds = new Set(tabs.filter((tab) => !migratesId(tab)).map((tab) => tab.id))
     const nextTabs = tabs.map((tab) => {
       // Why: widened for the shared live-move rekey — a move retargets every editor-family tab (diff/conflict-review/check-details), not only plain 'editor'.
       if (!isEditorTabContentType(tab.contentType)) {
         return tab
       }
-      const nextId = idMigrations.get(tab.id) ?? tab.id
+      const migratedId = idMigrations.get(tab.id)
+      // Why: a view already holding the migrated id would be dropped as a repeat; keeping this id lets the per-group dedupe below pick the pinned copy and leaves split views apart.
+      const nextId = migratedId && !claimedTabIds.has(migratedId) ? migratedId : tab.id
+      claimedTabIds.add(nextId)
       const nextEntityId = idMigrations.get(tab.entityId) ?? tab.entityId
       if (nextId === tab.id && nextEntityId === tab.entityId) {
         return tab
