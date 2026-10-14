@@ -2,10 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { focusTerminalTabSurface } from './focus-terminal-tab-surface'
 
 const mocks = vi.hoisted(() => ({
-  refreshTerminalImeInputContext: vi.fn()
+  refreshTerminalImeInputContext: vi.fn(),
+  isTerminalFocusUnclaimed: vi.fn(
+    (activeElement: unknown, ownerDocument: { body: unknown }) =>
+      activeElement === null || activeElement === ownerDocument.body
+  )
 }))
 
 vi.mock('@/components/terminal-pane/terminal-ime-input-context-refresh', () => ({
+  isTerminalFocusUnclaimed: mocks.isTerminalFocusUnclaimed,
   refreshTerminalImeInputContext: mocks.refreshTerminalImeInputContext
 }))
 
@@ -18,6 +23,7 @@ const GLOBAL_HELPER_SELECTOR =
 describe('focusTerminalTabSurface', () => {
   afterEach(() => {
     mocks.refreshTerminalImeInputContext.mockClear()
+    mocks.isTerminalFocusUnclaimed.mockClear()
     vi.unstubAllGlobals()
   })
 
@@ -84,6 +90,25 @@ describe('focusTerminalTabSurface', () => {
     documentState.activeElement = outside
     frames.shift()?.(0)
 
+    expect(textarea.focus).not.toHaveBeenCalled()
+  })
+
+  it('does not take body focus that another helper is about to reclaim after its IME refresh', () => {
+    flushAnimationFrames()
+    const textarea = { focus: vi.fn() }
+    const body = {}
+    vi.stubGlobal('document', {
+      activeElement: body,
+      body,
+      querySelector: vi.fn((selector: string) =>
+        selector === TAB_HELPER_SELECTOR ? textarea : null
+      )
+    })
+    mocks.isTerminalFocusUnclaimed.mockReturnValueOnce(false)
+
+    focusTerminalTabSurface('tab-1', null, { onlyIfFocusUnclaimed: true })
+
+    expect(mocks.isTerminalFocusUnclaimed).toHaveBeenCalledWith(body, document, textarea)
     expect(textarea.focus).not.toHaveBeenCalled()
   })
 
