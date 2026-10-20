@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as AgentStatusModule from '@/lib/agent-status'
 import { LOCAL_EXECUTION_HOST_ID } from '../../../shared/execution-host'
 import type { Tab, TabGroup, TabGroupLayoutNode } from '../../../shared/tab-types'
@@ -8,6 +8,11 @@ import type { OpenFile } from '../store/slices/editor'
 import { createStoreSessionMockApi } from '../store/slices/store-session-test-harness'
 import { createTestStore, makeWorktree } from '../store/slices/store-test-helpers'
 import { buildPersistedUnifiedTabSessionData } from './workspace-session-unified-tabs'
+import {
+  resetStructuredAgentLaunchPersistenceForTests,
+  writeStructuredAgentLaunchRecord
+} from './structured-agent-session-launch-persistence'
+import { structuredAgentSessionTabId } from '../../../shared/structured-agent-session-projection'
 
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }))
 vi.mock('@/lib/agent-status', async (importOriginal) => {
@@ -424,5 +429,46 @@ describe('buildPersistedUnifiedTabSessionData emptied groups', () => {
 
     expect(saved.tabGroups).toEqual({})
     expect(saved.tabGroupLayouts).toEqual({})
+  })
+})
+
+describe('buildPersistedUnifiedTabSessionData structured launch slots', () => {
+  const slotId = structuredAgentSessionTabId('pending-chat')
+
+  afterEach(() => {
+    resetStructuredAgentLaunchPersistenceForTests()
+  })
+
+  it('keeps a pending launch slot in its group, with or without restorable tabs', () => {
+    writeStructuredAgentLaunchRecord({
+      sessionId: 'pending-chat',
+      executionHostId: 'local',
+      agent: 'claude',
+      lifecycle: 'pending',
+      clientOperationId: 'op',
+      payloadFingerprint: 'fingerprint',
+      expectedRuntimeFence: null,
+      surfaceAddress: { worktreeId: WT, targetGroupId: 'kept', precedingTabIds: [] }
+    })
+    const group = { id: 'kept', worktreeId: WT, activeTabId: null, tabOrder: [slotId] }
+
+    const slotOnly = buildPersistedUnifiedTabSessionData({
+      unifiedTabsByWorktree: { [WT]: [] },
+      groupsByWorktree: { [WT]: [group] },
+      layoutByWorktree: {},
+      activeGroupIdByWorktree: {},
+      openFiles: []
+    })
+    expect(slotOnly.tabGroups?.[WT]?.[0]?.tabOrder).toEqual([slotId])
+
+    const mixed = buildPersistedUnifiedTabSessionData({
+      unifiedTabsByWorktree: { [WT]: [terminalEntry] },
+      groupsByWorktree: { [WT]: [{ ...group, tabOrder: [slotId, 'tab-a'] }] },
+      layoutByWorktree: {},
+      activeGroupIdByWorktree: {},
+      openFiles: []
+    })
+    expect(mixed.tabGroups?.[WT]?.[0]?.tabOrder).toEqual([slotId, 'tab-a'])
+    expect(mixed.unifiedTabs?.[WT]?.map((tab) => tab.id)).toEqual(['tab-a'])
   })
 })
