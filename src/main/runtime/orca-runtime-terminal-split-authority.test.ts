@@ -13,6 +13,7 @@ const TAB_ID = 'tab-remote'
 const SOURCE_LEAF_ID = '11111111-1111-4111-8111-111111111111'
 const SOURCE_PTY_ID = 'pty-source'
 const SPLIT_PTY_ID = 'pty-split'
+const SPLIT_INCARNATION_ID = 'pty-split-inc'
 
 function sourceLayout(): TerminalLayoutSnapshot {
   return {
@@ -109,11 +110,11 @@ function createHarness(
     },
     persistPtyBinding: () => true
   })
-  let resolveSpawn: ((result: { id: string }) => void) | undefined
+  let resolveSpawn: ((result: { id: string; incarnationId: string }) => void) | undefined
   const spawn = options.deferSpawn
     ? vi.fn(
         () =>
-          new Promise<{ id: string }>((resolve) => {
+          new Promise<{ id: string; incarnationId?: string }>((resolve) => {
             resolveSpawn = resolve
           })
       )
@@ -222,7 +223,7 @@ function createHarness(
       }
     },
     resolveReveal: () => resolveReveal?.({ tabId: TAB_ID }),
-    resolveSpawn: () => resolveSpawn?.({ id: SPLIT_PTY_ID })
+    resolveSpawn: () => resolveSpawn?.({ id: SPLIT_PTY_ID, incarnationId: SPLIT_INCARNATION_ID })
   }
 }
 
@@ -298,7 +299,9 @@ describe('remote runtime terminal split authority', () => {
     expect(harness.revealTerminalSession).not.toHaveBeenCalled()
   })
 
-  it('splits a persisted tab without consulting an unmounted host renderer', async () => {
+  // STA-9417: the window's graph lags a tab it already holds, so the split is offered regardless;
+  // a window without the tab rejects it and the persisted split stands.
+  it('splits a persisted tab the window has not listed, and still offers it to the window', async () => {
     const harness = createHarness()
 
     const outcome = await harness.runtime
@@ -312,7 +315,14 @@ describe('remote runtime terminal split authority', () => {
     })
     expect.soft(harness.spawn).toHaveBeenCalledTimes(1)
     expect.soft(harness.kill).not.toHaveBeenCalled()
-    expect.soft(harness.revealTerminalSession).not.toHaveBeenCalled()
+    expect.soft(harness.revealTerminalSession).toHaveBeenCalledWith(
+      WORKTREE_ID,
+      expect.objectContaining({
+        ptyId: SPLIT_PTY_ID,
+        tabId: TAB_ID,
+        splitFromLeafId: SOURCE_LEAF_ID
+      })
+    )
     const persistedLayout = harness.getSession().terminalLayoutsByTabId[TAB_ID]
     expect(persistedLayout).toMatchObject({
       root: { type: 'split', direction: 'vertical' },
@@ -328,6 +338,29 @@ describe('remote runtime terminal split authority', () => {
       )
     expect(siblingSurfaces).toHaveLength(2)
     expect(siblingSurfaces.every((tab) => tab.parentLayout?.root?.type === 'split')).toBe(true)
+  })
+
+  it("gives a split the host's account env, under the caller's own env", async () => {
+    const harness = createHarness()
+    harness.runtime.setHostAccountLaunchEnv({
+      wslDistro: 'Ubuntu',
+      claude: {},
+      terminal: { CODEX_HOME: '/home/u/.orca/codex/b', ORCA_CLAUDE_PROFILE_POINTER: '~/p' }
+    })
+
+    await harness.runtime.splitTerminal(harness.handle, {
+      direction: 'vertical',
+      env: { ORCA_CLAUDE_PROFILE_POINTER: '~/caller' }
+    })
+
+    expect(harness.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CODEX_HOME: '/home/u/.orca/codex/b',
+          ORCA_CLAUDE_PROFILE_POINTER: '~/caller'
+        })
+      })
+    )
   })
 
   it('rejects an unowned split source before spawning a PTY', async () => {
@@ -429,7 +462,7 @@ describe('remote runtime terminal split authority', () => {
       expect.objectContaining({ deadlineMs: expect.any(Number) })
     )
     expect(harness.kill).not.toHaveBeenCalled()
-    expect(harness.retireRejectedPty).toHaveBeenCalledWith(SPLIT_PTY_ID, true)
+    expect(harness.retireRejectedPty).toHaveBeenCalledWith(SPLIT_PTY_ID, true, SPLIT_INCARNATION_ID)
   })
 
   it('refuses a split whose source is only projected, before spawning', async () => {
@@ -463,7 +496,11 @@ describe('remote runtime terminal split authority', () => {
 
     await expect(split).rejects.toThrow('terminal_split_source_not_found')
     expect(harness.kill).toHaveBeenCalledWith(SPLIT_PTY_ID)
-    expect(harness.retireRejectedPty).toHaveBeenCalledWith(SPLIT_PTY_ID, false)
+    expect(harness.retireRejectedPty).toHaveBeenCalledWith(
+      SPLIT_PTY_ID,
+      false,
+      SPLIT_INCARNATION_ID
+    )
     expect(harness.getSession().terminalLayoutsByTabId[TAB_ID]?.root).toEqual({
       type: 'leaf',
       leafId: SOURCE_LEAF_ID

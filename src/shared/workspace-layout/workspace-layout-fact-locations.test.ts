@@ -121,7 +121,6 @@ function populate(loaded: LoadedWorkspaceLayout): LoadedWorkspaceLayout {
   fill(loaded, 'tab.quickCommandLabel', 'build', terminal)
   fill(loaded, 'tab.isPreview', true, (holder) => holder.kind === 'editor')
   fill(loaded, 'tab.terminal.forceHostRuntime', true)
-  fill(loaded, 'tab.terminal.agentLaunchPane', { leafId: leaf(1) })
   fill(loaded, 'file.externalSshTargetId', 'box')
   fill(loaded, 'file.runtimeEnvironmentId', 'env')
   fill(loaded, 'file.mirroredFromRuntimeSession', true)
@@ -156,6 +155,9 @@ function populate(loaded: LoadedWorkspaceLayout): LoadedWorkspaceLayout {
   fill(loaded, 'carried.workspaceDocHistory', [{ path: 'a' }, { path: 'b' }])
   fill(loaded, 'carried.clientHostedBrowserCloseIntentsByEnvironment', {
     env: ['page-1', 'page-2']
+  })
+  fill(loaded, 'carried.pairedTerminalTabCloseIntentsByEnvironment', {
+    env: ['host-tab-1', 'host-tab-2']
   })
   const sleeping = (field: keyof LayoutSleepingRecord, value: unknown) =>
     fill(loaded, `leaf.sleeping.${field}` as const, value)

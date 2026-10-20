@@ -2,16 +2,19 @@
 import {
   OrcadHostUnsupportedError,
   OrcadStdioBridgeUnavailableError
-} from './orcad-host-unavailable'
-import { resolveOrcadRemoteContext } from './orcad-remote-context'
-import { orcadWindowsHomeOpCommand } from './orcad-remote-windows-node'
+} from '../orcad/orcad-host-unavailable'
+import { resolveOrcadRemoteContext } from '../managed-server/install/orcad-remote-context'
+import { orcadWindowsHomeOpCommand } from '../managed-server/install/orcad-remote-windows-node'
 import {
   orcadPosixStdioBridgeCommand,
   type OrcadStdioBridgeMode
-} from './orcad-stdio-bridge-script'
-import { OrcadStdioBridgeDecoder, type OrcadStdioBridgeSignal } from './orcad-stdio-bridge-stream'
-import type { OrcadHostTransport } from './orcad-host-transport'
-import type { RemoteCommandChannel } from './remote-install-transport'
+} from '../managed-server/lifecycle/orcad-stdio-bridge-script'
+import {
+  OrcadStdioBridgeDecoder,
+  type OrcadStdioBridgeSignal
+} from '../managed-server/lifecycle/orcad-stdio-bridge-stream'
+import { isWslOrcadHostTarget, type OrcadHostTransport } from './orcad-host-transport'
+import type { RemoteCommandChannel } from '../managed-server/install/remote-install-transport'
 import { isWindowsRemoteHost } from './ssh-remote-platform'
 import { detectRemoteHostPlatform } from './ssh-remote-platform-detection'
 
@@ -37,8 +40,13 @@ export async function resolveOrcadStdioBridge(
   if (!isWindowsRemoteHost(host)) {
     return { command: orcadPosixStdioBridgeCommand(port), mode: 'raw', wrapCommand: true }
   }
+  const target = conn.getTarget()
+  // A WSL distro is a Linux host, so a Windows answer from it is not one this path can serve.
+  if (isWslOrcadHostTarget(target)) {
+    throw new OrcadHostUnsupportedError('This WSL distro reported a Windows host platform.')
+  }
   // Stages this client's pinned node.exe and host script, which an app update may have changed.
-  const context = await resolveOrcadRemoteContext(conn.getTarget(), conn, undefined, host)
+  const context = await resolveOrcadRemoteContext(target, conn, undefined, host)
   return {
     command: orcadWindowsHomeOpCommand(host, context.remoteHome, 'stdio-bridge', [String(port)]),
     mode: 'base64',

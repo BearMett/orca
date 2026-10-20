@@ -11,7 +11,6 @@
  * survives, because one bad tab record must not cost every worktree its state.
  * Only a payload that is not a session at all falls back to defaults.
  */
-import { agentLaunchPaneOnTabSchema } from './agent-launch-pane-verdict'
 import { z } from 'zod'
 import { closedTerminalTabTombstoneSchema } from './closed-terminal-tab-tombstones'
 import type { WorkspaceKey } from './folder-workspace-types'
@@ -30,7 +29,7 @@ import {
   browserPageSchema,
   browserWorkspaceSchema
 } from './workspace-session-browser-schema'
-import { clientHostedBrowserCloseIntentSchema } from './client-hosted-browser-close-intent'
+import { workspaceSessionCloseIntentFieldSchemas } from './workspace-session-close-intent-schema'
 import { persistedClientHostedBrowserPageSchema } from './client-hosted-browser-page-record'
 import { persistedOpenFileSchema } from './workspace-session-editor-schema'
 import { sleepingAgentSessionsByPaneKeySchema } from './workspace-session-sleeping-agents'
@@ -119,9 +118,7 @@ export const terminalTabSchema = z.object({
   launchAgent: z
     .custom<TuiAgent>((v) => isTuiAgent(v))
     .optional()
-    .catch(undefined),
-  // Why: survives a restart so a restored launch pane reads its fate before it spawns.
-  agentLaunchPane: agentLaunchPaneOnTabSchema
+    .catch(undefined)
 })
 
 // ─── Unified tab model ──────────────────────────────────────────────
@@ -260,10 +257,7 @@ export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.o
     'clientHostedBrowserPagesByWorktree',
     salvagingRecord(worktreeIdSchema, salvagingArray(persistedClientHostedBrowserPageSchema))
   ),
-  clientHostedBrowserCloseIntentsByEnvironment: salvagedOptional(
-    'clientHostedBrowserCloseIntentsByEnvironment',
-    salvagingRecord(z.string().min(1), salvagingArray(clientHostedBrowserCloseIntentSchema))
-  ),
+  ...workspaceSessionCloseIntentFieldSchemas,
   activeTabTypeByWorktree: salvagedOptional(
     'activeTabTypeByWorktree',
     salvagingRecord(worktreeIdSchema, workspaceVisibleTabTypeSchema)

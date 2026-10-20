@@ -43,7 +43,7 @@ export function getRuntimeLeafIdsForTerminal(
   if (persistedLeafIds.length > 0) {
     return persistedLeafIds
   }
-  // A new tab can predate TerminalPane mount; do not fabricate a stale pane:1.
+  // Only a tab with no saved layout, or an older rootless one, gets here; do not fabricate pane:1.
   return []
 }
 
@@ -82,9 +82,8 @@ export function isMobilePublishableOpenFile(file: AppState['openFiles'][number])
   if (file.mirroredFromRuntimeSession === true) {
     return false
   }
-  // Combined diff tabs use display labels as paths and need the desktop renderer, as do chat visuals.
+  // Combined diff tabs use display labels as paths and need the desktop renderer.
   return !(
-    file.mode === 'chat-visual' ||
     file.diffSource === 'combined-all' ||
     file.diffSource === 'combined-uncommitted' ||
     file.diffSource === 'combined-branch' ||
