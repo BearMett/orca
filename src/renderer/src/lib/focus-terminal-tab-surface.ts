@@ -3,6 +3,7 @@ import {
   refreshTerminalImeInputContext
 } from '@/components/terminal-pane/terminal-ime-input-context-refresh'
 import { UNCOVERED_TERMINAL_LEAF_SELECTOR } from '@/components/terminal-pane/native-chat-covered-pane'
+import { requestNativeChatComposerFocus } from '@/components/native-chat/use-native-chat-composer-reveal-focus'
 
 /**
  * Move keyboard focus into the xterm instance for a freshly-mounted terminal
@@ -77,6 +78,10 @@ export function focusTerminalTabSurface(
       const escapedTabId = cssAttributeString(tabId)
       const tabElement = document.querySelector(`[data-terminal-tab-id="${escapedTabId}"]`)
       if (tabElement?.getAttribute('data-terminal-chat-view') === 'true') {
+        // The chat over this terminal takes the focus in its composer instead.
+        if (!options.onlyIfFocusUnclaimed || document.activeElement === document.body) {
+          requestNativeChatComposerFocus(tabId)
+        }
         return
       }
       // Why: a split chat tab keeps a covered xterm under the chat leaf; the

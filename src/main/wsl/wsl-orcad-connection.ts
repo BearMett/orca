@@ -4,30 +4,28 @@
  * distro; a relaunch that moved orcad's port moves the bridge with it. In memory only: the
  * deployment record (C7) persists what `onChange` reports.
  */
-import { parsePairingCode } from '../../shared/pairing'
-import { pairedRuntimeConnectionFromOffer } from '../../shared/paired-runtime-connection'
+import { errorMessage } from '../../shared/error-message'
+import { parsePairingCode, type PairingOffer } from '../../shared/pairing'
 import type { ServeReadiness } from '../server/serve-readiness'
 import type { OrcadHostTransport } from '../ssh/orcad-host-transport'
-import {
-  OrcadManagedIdentityError,
-  verifyOrcadPairingIdentity,
-  type OrcadTunnelIdentity
-} from '../ssh/orcad-managed-tunnel-identity'
-import { tunneledOrcadPairingCode } from '../ssh/orcad-tunneled-pairing'
-import type { StartedPortForward } from '../ssh/ssh-port-forward-provider'
+import type { OrcadTunnelIdentity } from '../managed-server/lifecycle/orcad-managed-tunnel-identity'
+import type { StartedPortForward } from '../ssh/port-forwarding/ssh-port-forward-provider'
 import type { WslDistroHolder } from './wsl-distro-holder'
 import type { WslOrcadConnectionStatus } from './wsl-orcad-connection-status'
 import { wslDistroHolderKey } from './wsl-distro-holder-record'
 import {
   defaultWslOrcadEnvironmentId,
   deployAndLaunchWslOrcad,
+  type WslOrcadDeferredUpdate,
   type WslOrcadDeployOptions,
   type WslOrcadLaunch
 } from './wsl-orcad-deploy'
 import type { WslOrcadHostTarget } from './wsl-orcad-host-target'
 import { createWslOrcadHostTransport } from './wsl-orcad-host-transport'
+import { resolveWslOrcadPairing } from './wsl-orcad-pairing-identity'
+import { trackWslOrcadHostEnvironment } from './wsl-orcad-host-environments'
 import {
-  listenWslOrcadStdioBridge,
+  listenWslOrcadStdioBridgeOnPreferredPort,
   type WslOrcadStdioBridgeOptions
 } from './wsl-orcad-stdio-bridge'
 
@@ -43,6 +41,8 @@ export type WslOrcadConnection = {
   pid: number | null
   /** orcad's pairing code, with its endpoint rewritten to `ws://127.0.0.1:<localPort>`. */
   pairingOffer: string
+  /** An app update the incumbent `fullVersion` is waiting to take (live terminals). */
+  deferredUpdate: WslOrcadDeferredUpdate | null
   close(): Promise<void>
 }
 
@@ -81,6 +81,7 @@ const READY: WslOrcadConnectionStatus = { state: 'ready', census: null }
 
 export type WslOrcadConnectionDependencies = {
   holder?: WslDistroHolder
+  getPairingOffer?: (environmentId: string) => PairingOffer | null
   deployAndLaunch?: (distro: string, options: WslOrcadDeployOptions) => Promise<WslOrcadLaunch>
   createTransport?: (target: WslOrcadHostTarget) => OrcadHostTransport
   listen?: (
@@ -117,7 +118,19 @@ export class WslOrcadConnectionManager {
     const key = wslDistroHolderKey(name)
     const pending = this.inFlight.get(key)
     if (pending) {
+      if (!options.force) {
+        return pending
+      }
+      // Force needs its own deploy; joining a plain connect would silently drop it.
+      const generation = this.generation(key)
       return pending
+        .catch(() => {})
+        .then(() => {
+          if (this.generation(key) !== generation) {
+            throw new WslOrcadConnectionSupersededError(name)
+          }
+          return this.ensure(distro, options)
+        })
     }
     const status = options.status ?? { pending: CONNECTING, ready: READY }
     // A refresh of a live connection stays quiet; liveness recovery always reports.
@@ -129,7 +142,7 @@ export class WslOrcadConnectionManager {
       if (!options.status && !(error instanceof WslOrcadConnectionSupersededError)) {
         this.dependencies.onChange?.(name, this.get(name), {
           state: 'failed',
-          reason: error instanceof Error ? error.message : String(error),
+          reason: errorMessage(error),
           terminals: 'unverifiable'
         })
       }
@@ -166,6 +179,7 @@ export class WslOrcadConnectionManager {
     }
     this.active.delete(key)
     await entry.forward.close()
+    trackWslOrcadHostEnvironment(entry.connection, null)
     this.dependencies.onChange?.(entry.connection.distro, null, { state: 'closed' })
   }
 
@@ -209,42 +223,61 @@ export class WslOrcadConnectionManager {
       throw new WslOrcadConnectionSupersededError(distro)
     }
     const current = this.active.get(key)
+    const paired =
+      this.dependencies.getPairingOffer?.(environmentId) ??
+      (current?.connection.environmentId === environmentId
+        ? parsePairingCode(current.connection.pairingOffer)
+        : null)
     if (
       current &&
       current.connection.remotePort === launch.port &&
       current.connection.environmentId === environmentId
     ) {
-      return this.refreshOffer(key, current, launch, options.status ? status.ready : null)
+      const pairingOffer = await resolveWslOrcadPairing(
+        launch,
+        current.connection.localPort,
+        paired,
+        this.dependencies.verifyIdentity
+      )
+      if (this.generation(key) !== generation) {
+        throw new WslOrcadConnectionSupersededError(distro)
+      }
+      return this.refreshOffer(
+        key,
+        current,
+        launch,
+        pairingOffer,
+        options.status ? status.ready : null
+      )
     }
     // orcad moved ports (or this is the first connect): the old bridge dials a dead port.
     const preferredLocalPort = current?.connection.localPort ?? options.localPort ?? 0
     if (current) {
       this.active.delete(key)
       await current.forward.close()
+      trackWslOrcadHostEnvironment(current.connection, null)
       this.dependencies.onChange?.(distro, null, status.pending)
     }
-    const forward = await this.listen(transport, {
-      environmentId,
-      remotePort: launch.port,
-      localPort: preferredLocalPort,
-      label: `Orca server in WSL: ${label}`
-    })
+    const forward = await listenWslOrcadStdioBridgeOnPreferredPort(
+      transport,
+      {
+        environmentId,
+        remotePort: launch.port,
+        localPort: preferredLocalPort,
+        label: `Orca server in WSL: ${label}`
+      },
+      this.dependencies.listen
+    )
     try {
       if (this.generation(key) !== generation) {
         throw new WslOrcadConnectionSupersededError(distro)
       }
-      const pairingOffer = tunneledOrcadPairingCode(launch.readiness, forward.entry.localPort)
-      const identity = await (this.dependencies.verifyIdentity ?? verifyWslOrcadIdentity)(
-        pairingOffer,
-        launch.readiness
+      const pairingOffer = await resolveWslOrcadPairing(
+        launch,
+        forward.entry.localPort,
+        paired,
+        this.dependencies.verifyIdentity
       )
-      if (identity.verdict === 'foreign') {
-        throw new OrcadManagedIdentityError(launch.port, identity.detail)
-      }
-      if (identity.verdict === 'unreachable') {
-        // Why not fail: a server that is still starting is not a wrong server.
-        console.warn(`[wsl] Orca server in ${distro} did not answer its bridge: ${identity.detail}`)
-      }
       if (this.generation(key) !== generation) {
         throw new WslOrcadConnectionSupersededError(distro)
       }
@@ -258,10 +291,12 @@ export class WslOrcadConnectionManager {
           fullVersion: launch.fullVersion,
           pid: launch.pid,
           pairingOffer,
+          deferredUpdate: launch.deferredUpdate ?? null,
           close: () => this.closeEntry(key, entry)
         }
       }
       this.active.set(key, entry)
+      trackWslOrcadHostEnvironment(entry.connection, entry.connection)
       this.dependencies.onChange?.(distro, entry.connection, status.ready)
       return entry.connection
     } catch (error) {
@@ -274,43 +309,26 @@ export class WslOrcadConnectionManager {
     key: string,
     entry: ActiveWslOrcadConnection,
     launch: Extract<WslOrcadLaunch, { outcome: 'ready' }>,
+    pairingOffer: string,
     /** Reported even when nothing changed; null stays quiet then. */
     announce: WslOrcadConnectionStatus | null
   ): WslOrcadConnection {
-    const pairingOffer = tunneledOrcadPairingCode(launch.readiness, entry.connection.localPort)
+    const deferredUpdate = launch.deferredUpdate ?? null
     const changed =
       pairingOffer !== entry.connection.pairingOffer ||
       launch.fullVersion !== entry.connection.fullVersion ||
-      launch.pid !== entry.connection.pid
+      launch.pid !== entry.connection.pid ||
+      JSON.stringify(deferredUpdate) !== JSON.stringify(entry.connection.deferredUpdate)
     if (changed) {
       const { fullVersion, pid } = launch
-      entry.connection = { ...entry.connection, pairingOffer, fullVersion, pid }
+      entry.connection = { ...entry.connection, pairingOffer, fullVersion, pid, deferredUpdate }
       this.active.set(key, entry)
     }
+    trackWslOrcadHostEnvironment(entry.connection, entry.connection)
     if (changed || announce) {
       this.dependencies.onChange?.(entry.connection.distro, entry.connection, announce ?? READY)
     }
     return entry.connection
-  }
-
-  /** A persisted local port may be taken by now; a free one beats no connection. */
-  private async listen(
-    transport: OrcadHostTransport,
-    options: WslOrcadStdioBridgeOptions
-  ): Promise<StartedPortForward> {
-    const listen = this.dependencies.listen ?? listenWslOrcadStdioBridge
-    try {
-      return await listen(transport, options)
-    } catch (error) {
-      if (options.localPort === 0) {
-        throw error
-      }
-      console.warn(
-        `[wsl] Could not rebind local port ${options.localPort}; picking another:`,
-        error instanceof Error ? error.message : error
-      )
-      return listen(transport, { ...options, localPort: 0 })
-    }
   }
 
   private async closeEntry(key: string, entry: ActiveWslOrcadConnection): Promise<void> {
@@ -318,18 +336,6 @@ export class WslOrcadConnectionManager {
       await this.close(key)
     }
   }
-}
-
-async function verifyWslOrcadIdentity(
-  pairingOffer: string,
-  readiness: ServeReadiness
-): Promise<OrcadTunnelIdentity> {
-  const offer = parsePairingCode(pairingOffer)
-  return offer
-    ? verifyOrcadPairingIdentity(pairedRuntimeConnectionFromOffer(offer), {
-        runtimeId: readiness.runtimeId || null
-      })
-    : { verdict: 'foreign', detail: 'The Orca server in WSL published an invalid pairing offer.' }
 }
 
 function defaultTransport(target: WslOrcadHostTarget): OrcadHostTransport {

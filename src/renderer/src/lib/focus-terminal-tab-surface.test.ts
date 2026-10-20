@@ -6,7 +6,12 @@ const mocks = vi.hoisted(() => ({
   isTerminalFocusUnclaimed: vi.fn(
     (activeElement: unknown, ownerDocument: { body: unknown }) =>
       activeElement === null || activeElement === ownerDocument.body
-  )
+  ),
+  requestNativeChatComposerFocus: vi.fn()
+}))
+
+vi.mock('@/components/native-chat/use-native-chat-composer-reveal-focus', () => ({
+  requestNativeChatComposerFocus: mocks.requestNativeChatComposerFocus
 }))
 
 vi.mock('@/components/terminal-pane/terminal-ime-input-context-refresh', () => ({
@@ -24,6 +29,7 @@ describe('focusTerminalTabSurface', () => {
   afterEach(() => {
     mocks.refreshTerminalImeInputContext.mockClear()
     mocks.isTerminalFocusUnclaimed.mockClear()
+    mocks.requestNativeChatComposerFocus.mockClear()
     vi.unstubAllGlobals()
   })
 
@@ -129,7 +135,7 @@ describe('focusTerminalTabSurface', () => {
     expect(textarea.focus).not.toHaveBeenCalled()
   })
 
-  it('does not focus xterm while chat covers the terminal tab', () => {
+  it('hands the focus to the chat composer instead of xterm while chat covers the terminal tab', () => {
     flushAnimationFrames()
     const textarea = { focus: vi.fn() }
     vi.stubGlobal('document', {
@@ -146,6 +152,7 @@ describe('focusTerminalTabSurface', () => {
     focusTerminalTabSurface('tab-1')
 
     expect(textarea.focus).not.toHaveBeenCalled()
+    expect(mocks.requestNativeChatComposerFocus).toHaveBeenCalledWith('tab-1')
   })
 
   it('skips the chat leaf helper when a split chat tab has an active terminal leaf', () => {
