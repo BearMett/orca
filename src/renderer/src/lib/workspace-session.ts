@@ -160,10 +160,7 @@ export function buildEditorSessionData(
 
   const activeFileEntries: [string, string][] = []
   for (const [worktreeId, fileId] of Object.entries(activeFileIdByWorktree)) {
-    if (!fileId) {
-      continue
-    }
-    if (editFileIdsByWorktree[worktreeId]?.has(fileId)) {
+    if (fileId && editFileIdsByWorktree[worktreeId]?.has(fileId)) {
       activeFileEntries.push([worktreeId, fileId])
     }
   }
