@@ -155,6 +155,26 @@ describe('focusTerminalTabSurface', () => {
     expect(mocks.requestNativeChatComposerFocus).toHaveBeenCalledWith('tab-1')
   })
 
+  it('does not hand guarded recovery focus to the chat composer while another helper awaits its IME refocus', () => {
+    flushAnimationFrames()
+    const body = {}
+    vi.stubGlobal('document', {
+      activeElement: body,
+      body,
+      querySelector: vi.fn((selector: string) =>
+        selector === '[data-terminal-tab-id="tab-1"]'
+          ? { getAttribute: (name: string) => (name === 'data-terminal-chat-view' ? 'true' : null) }
+          : null
+      )
+    })
+    mocks.isTerminalFocusUnclaimed.mockReturnValueOnce(false)
+
+    focusTerminalTabSurface('tab-1', null, { onlyIfFocusUnclaimed: true })
+
+    expect(mocks.isTerminalFocusUnclaimed).toHaveBeenCalledWith(body, document)
+    expect(mocks.requestNativeChatComposerFocus).not.toHaveBeenCalled()
+  })
+
   it('skips the chat leaf helper when a split chat tab has an active terminal leaf', () => {
     flushAnimationFrames()
     const coveredTextarea = { focus: vi.fn() }

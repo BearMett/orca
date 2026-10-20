@@ -79,7 +79,10 @@ export function focusTerminalTabSurface(
       const tabElement = document.querySelector(`[data-terminal-tab-id="${escapedTabId}"]`)
       if (tabElement?.getAttribute('data-terminal-chat-view') === 'true') {
         // The chat over this terminal takes the focus in its composer instead.
-        if (!options.onlyIfFocusUnclaimed || document.activeElement === document.body) {
+        if (
+          !options.onlyIfFocusUnclaimed ||
+          isTerminalFocusUnclaimed(document.activeElement, document)
+        ) {
           requestNativeChatComposerFocus(tabId)
         }
         return
