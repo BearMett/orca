@@ -1,3 +1,4 @@
+import { structuredLaunchSlotIds } from './structured-agent-session-launch-persistence'
 import type { Tab, TabGroup } from '../../../shared/tab-types'
 import type { WorkspaceSessionState } from '../../../shared/workspace-session-state-types'
 import type { WorkspaceSessionSnapshot } from './workspace-session'
@@ -10,9 +11,9 @@ import {
   appendOwnedTabIdsToGroups,
   adoptGrouplessTabs,
   layoutSpanningGroups,
-  resolveTabGroupOwners,
   restrictGroupToOwnedTabs
 } from '../store/slices/tab-group-reference-repair'
+import { resolveTabGroupOwners } from '../../../shared/workspace-layout/tab-group-owners'
 import { pruneTabGroupLayoutForGroups } from '../store/slices/tabs-hydration'
 
 type PersistedUnifiedTabSessionData = Pick<
@@ -37,7 +38,12 @@ function buildPersistedTabsAndGroups(
   const tabOwners = resolveTabGroupOwners(restorableTabs, groups, deduped.tabIdAliasesByGroup)
   const persistedGroups = appendOwnedTabIdsToGroups(groups, tabOwners)
     .map((group) =>
-      restrictGroupToOwnedTabs(group, tabOwners, deduped.tabIdAliasesByGroup.get(group.id))
+      restrictGroupToOwnedTabs(
+        group,
+        tabOwners,
+        deduped.tabIdAliasesByGroup.get(group.id),
+        structuredLaunchSlotIds(worktreeId, group.id)
+      )
     )
     .filter((group) => group.tabOrder.length > 0)
   const persistedTabs = restorableTabs.map((tab) => {
@@ -55,7 +61,12 @@ function buildPersistedTabsAndGroups(
     adopted.tabIdAliasesByGroup
   )
   const finalGroups = groupsByWorktree[worktreeId].map((group) =>
-    restrictGroupToOwnedTabs(group, adoptedOwners, adopted.tabIdAliasesByGroup.get(group.id))
+    restrictGroupToOwnedTabs(
+      group,
+      adoptedOwners,
+      adopted.tabIdAliasesByGroup.get(group.id),
+      structuredLaunchSlotIds(worktreeId, group.id)
+    )
   )
   const retainedById = new Map(adopted.tabs.map((tab) => [tab.id, tab]))
   return {
@@ -103,9 +114,8 @@ export function buildPersistedUnifiedTabSessionData(
   ])
 
   for (const worktreeId of worktreeIds) {
-    // Why: chat-visual tabs are in memory only; the saved-session schema has no such kind.
-    const tabs = (sourceTabs[worktreeId] ?? []).filter((tab) => tab.contentType !== 'chat-visual')
-    if (tabs.length === 0) {
+    const tabs = sourceTabs[worktreeId] ?? []
+    if (tabs.length === 0 && structuredLaunchSlotIds(worktreeId).size === 0) {
       continue
     }
 

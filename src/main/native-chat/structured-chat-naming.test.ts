@@ -8,6 +8,17 @@ import {
   createStructuredChatNamingHandler,
   type StructuredChatNamingDeps
 } from './structured-chat-naming'
+import { firstStructuredChatNamingPrompt } from '../../shared/structured-chat-naming-eligibility'
+import {
+  attach,
+  CALLER,
+  envelope,
+  hostTestState
+} from './agent-session-wire/structured-agent-session-host-test-harness'
+import {
+  HOST_TEST_SESSION,
+  hostTestMessage
+} from './agent-session-wire/structured-agent-session-host-test-data'
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {
@@ -44,7 +55,7 @@ function rig(provider: 'claude' | 'codex') {
     getStore: () => ({ getRecord, compareAndSetConversationName: setConversationName }),
     getSettings: () => ({}),
     now: () => 100,
-    hasOpenDispatch: vi.fn(() => false),
+    workerTaskTitle: vi.fn(() => null),
     readFirstPrompt: vi.fn(async () => 'Please repair the login flow'),
     generate: vi.fn(async () => 'auth/login'),
     onNamed: vi.fn(),
@@ -104,21 +115,45 @@ describe.each(['claude', 'codex'] as const)('structured %s chat naming', (provid
     expect(state.deps.generate).not.toHaveBeenCalled()
   })
 
-  it.each(['missing', 'named', 'worker'] as const)('skips a %s record', async (kind) => {
+  it.each(['missing', 'named'] as const)('skips a %s record', async (kind) => {
     const state = rig(provider)
     const record = state.read()
     if (!record) {
       throw new Error('Missing fixture')
     }
-    if (kind === 'missing') {
-      state.replace(null)
-    } else if (kind === 'named') {
-      state.replace({ ...record, conversationName: 'Existing name' })
-    } else {
-      state.deps.hasOpenDispatch = () => true
-    }
+    state.replace(kind === 'missing' ? null : { ...record, conversationName: 'Existing name' })
     state.handle(state.summary, { replay: false })
     await settle()
+    expect(state.deps.readFirstPrompt).not.toHaveBeenCalled()
+    expect(state.deps.generate).not.toHaveBeenCalled()
+  })
+
+  it('names an orchestration worker after its task without generating', async () => {
+    const state = rig(provider)
+    state.deps.workerTaskTitle = () => ({ title: 'PR27814 final readiness review' })
+    state.handle(state.summary, { replay: false })
+    await settle()
+    expect(state.read()?.conversationName).toBe('PR27814 final readiness review')
+    expect(state.deps.onNamed).toHaveBeenCalledTimes(1)
+    expect(state.deps.readFirstPrompt).not.toHaveBeenCalled()
+    expect(state.deps.generate).not.toHaveBeenCalled()
+  })
+
+  it('leaves a worker unnamed when naming is off', async () => {
+    const state = rig(provider)
+    state.deps.workerTaskTitle = () => ({ title: 'PR27814 final readiness review' })
+    state.deps.getSettings = () => ({ nativeChatAutoName: false })
+    state.handle(state.summary, { replay: false })
+    await settle()
+    expect(state.read()?.conversationName).toBeUndefined()
+  })
+
+  it('does not generate from a worker preamble when its task has no usable title', async () => {
+    const state = rig(provider)
+    state.deps.workerTaskTitle = () => ({ title: '' })
+    state.handle(state.summary, { replay: false })
+    await settle()
+    expect(state.read()?.conversationName).toBeUndefined()
     expect(state.deps.readFirstPrompt).not.toHaveBeenCalled()
     expect(state.deps.generate).not.toHaveBeenCalled()
   })
@@ -275,4 +310,28 @@ describe.each(['claude', 'codex'] as const)('structured %s chat naming', (provid
     expect(state.deps.generate).not.toHaveBeenCalled()
     print.mockRestore()
   })
+})
+
+it("names a chat from a real host's status feed once its first send runs", async () => {
+  const { host, store, log } = hostTestState()
+  host.deps.onSessionStatusChanged = createStructuredChatNamingHandler({
+    getStore: () => store,
+    getSettings: () => ({}),
+    workerTaskTitle: () => null,
+    readFirstPrompt: async (id, startedAt) =>
+      firstStructuredChatNamingPrompt(await host.journalSnapshot(id), startedAt),
+    generate: async () => 'auth/login',
+    onNamed: vi.fn(),
+    logger: log.logger
+  })
+  await attach()
+
+  const body = hostTestMessage('Please repair the login flow')
+  expect(
+    await host.send(CALLER, { envelope: envelope('agentSession.send', { body }), body })
+  ).toMatchObject({ ok: true })
+
+  await vi.waitFor(() =>
+    expect(store.getRecord(HOST_TEST_SESSION)?.conversationName).toBe('auth/login')
+  )
 })

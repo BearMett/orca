@@ -1,4 +1,4 @@
-// COMPAT(legacy-relay-bridge): revisit 2027-01-15, with src/main/ssh/legacy-relay-bridge/.
+// COMPAT(legacy-relay-bridge): revisit 2027-01-15, with src/main/ssh/legacy-relay/.
 // The managed server starts a shell for any unmaterialized pane a client activates. A pane an older
 // relay still runs is served by the bridge, so activating it would leave a second, unseen shell.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,7 +9,7 @@ import {
   recordWebSessionFocusIntent,
   resetWebSessionFocusIntentForTests
 } from './web-session-focus-intent'
-import { toWebTerminalSurfaceTabId } from './web-terminal-surface-id'
+import { toWebTerminalSurfaceTabId } from '../../../shared/terminal-surface-id'
 import { ENVIRONMENT_ID, WORKTREE_ID } from './web-runtime-session-test-harness'
 
 const mocks = vi.hoisted(() => ({
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../store', () => ({ useAppStore: { getState: mocks.getState } }))
-vi.mock('./web-session-tabs-sync', () => ({
+vi.mock('./web-session-tabs-sync/tracking-mappings', () => ({
   resolveHostSessionTabIdForWebSessionTab: mocks.resolveHostSessionTabIdForWebSessionTab
 }))
 

@@ -2,6 +2,8 @@ import type { Tab, TabContentType, TabGroup } from '../../../../shared/tab-types
 import type { WorkspaceSessionState } from '../../../../shared/workspace-session-state-types'
 import { createBrowserUuid } from '@/lib/browser-uuid'
 import { isValidTerminalTabId } from '../../../../shared/terminal-tab-id'
+import { ORCA_LAYOUT_OWNER_IS_MAIN } from '../../../../shared/layout-owner-switch'
+import { workspaceRootGroupId } from '../../../../shared/workspace-layout/workspace-layout-minted-ids'
 
 export function findTabAndWorktree(
   tabsByWorktree: Record<string, Tab[]>,
@@ -72,7 +74,8 @@ export function ensureGroup(
   if (existing) {
     return { group: existing, groupsByWorktree, activeGroupIdByWorktree }
   }
-  const groupId = createBrowserUuid()
+  // Switch point: the root group id main and the Loader mint for a workspace with no group.
+  const groupId = ORCA_LAYOUT_OWNER_IS_MAIN ? workspaceRootGroupId(worktreeId) : createBrowserUuid()
   const group: TabGroup = { id: groupId, worktreeId, activeTabId: null, tabOrder: [] }
   return {
     group,
@@ -137,8 +140,13 @@ export function pushRecentTabId(recent: string[] | undefined, tabId: string): st
 export function pickNextActiveTab(
   tabOrder: string[],
   recentTabIds: string[] | undefined,
-  closingTabId: string
+  closingTabId: string,
+  tabs?: readonly Pick<Tab, 'id'>[]
 ): string | null {
+  if (tabs) {
+    const realIds = new Set(tabs.map((tab) => tab.id))
+    tabOrder = tabOrder.filter((id) => realIds.has(id))
+  }
   const sanitized = sanitizeRecentTabIds(recentTabIds, tabOrder)
   // The closing tab is typically at the tail (it's the active tab). Walk back
   // from the tail looking for the most-recent *other* tab still present.
@@ -164,7 +172,9 @@ export function isTransientEditorContentType(contentType: TabContentType): boole
 
 export function canRestorePersistedTab(
   tab: Tab,
-  persistedEditFileIds: ReadonlySet<string>
+  persistedEditFileIds: ReadonlySet<string>,
+  /** A transient tab whose record the caller still holds, as a frame rebuild does. */
+  keepsTransientTab: (entityId: string) => boolean = () => false
 ): boolean {
   if (tab.contentType === 'terminal') {
     return isValidTerminalTabId(tab.id) && isValidTerminalTabId(tab.entityId)
@@ -172,7 +182,11 @@ export function canRestorePersistedTab(
   if (tab.contentType === 'editor' && tab.entityId.startsWith('html-preview::')) {
     return false
   }
-  return !isTransientEditorContentType(tab.contentType) || persistedEditFileIds.has(tab.entityId)
+  return (
+    !isTransientEditorContentType(tab.contentType) ||
+    persistedEditFileIds.has(tab.entityId) ||
+    keepsTransientTab(tab.entityId)
+  )
 }
 
 export function getPersistedEditFileIdsByWorktree(

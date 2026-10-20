@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { headlessServeOzonePlatformSwitches } from '../../shared/headless-serve-ozone-platform'
 import { encodePairingOffer, PAIRING_OFFER_VERSION } from '../../shared/pairing'
 import {
   getServeUpdateHandoffPath,
@@ -23,7 +24,7 @@ vi.mock('child_process', () => ({
   spawnSync: spawnSyncMock
 }))
 
-import { launchOrcaApp, serveOrcaApp } from './launch'
+import { getExecutableAppArgs, launchOrcaApp, serveOrcaApp, stripElectronRunAsNode } from './launch'
 
 class FakeChildProcess extends EventEmitter {
   stdout = new EventEmitter()
@@ -72,6 +73,8 @@ const INVALID_SSH_RECIPE_JSON = SSH_RECIPE_JSON.replace('/workspace/repo', 'rela
 const IGNORED_NON_RECIPE_STDOUT = '[serve] ignored non-recipe stdout'
 const PROFILE = resolve('/profiles/serve')
 const PIN_PROFILE = `--user-data-dir=${PROFILE}`
+// Linux CI runners get the X11 pin; macOS and Windows hosts get nothing.
+const HOST_SERVE_OZONE_SWITCHES = headlessServeOzonePlatformSwitches(process.platform)
 
 function restoreEnv(key: string, value: string | undefined): void {
   if (value === undefined) {
@@ -122,6 +125,20 @@ describe('serveOrcaApp', () => {
     return Promise.all(
       temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true }))
     )
+  })
+
+  it('names what to run when this orca is not an Orca app (an SSH host server CLI)', () => {
+    delete process.env.ORCA_APP_EXECUTABLE
+    const previous = process.env.ELECTRON_RUN_AS_NODE
+    delete process.env.ELECTRON_RUN_AS_NODE
+    try {
+      expect(() => serveOrcaApp({ supervise: true })).toThrow(
+        /Install the Orca app on this machine/
+      )
+      expect(spawnMock).not.toHaveBeenCalled()
+    } finally {
+      restoreEnv('ELECTRON_RUN_AS_NODE', previous)
+    }
   })
 
   it('launches an isolated profile with the keychain mocked, so serve is not blocked on it', async () => {
@@ -425,7 +442,7 @@ describe('serveOrcaApp', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       '/Applications/Orca.app/Contents/MacOS/Orca',
-      [PIN_PROFILE, '--serve', '--serve-json'],
+      [PIN_PROFILE, '--serve', '--serve-json', ...HOST_SERVE_OZONE_SWITCHES],
       expect.objectContaining({
         cwd: resolve(__dirname, '../../..')
       })
@@ -465,7 +482,8 @@ describe('serveOrcaApp', () => {
         '6768',
         '--serve-pairing-address',
         '100.64.1.20',
-        '--serve-mobile-pairing'
+        '--serve-mobile-pairing',
+        ...HOST_SERVE_OZONE_SWITCHES
       ],
       expect.objectContaining({
         cwd: resolve(__dirname, '../../..')
@@ -499,12 +517,23 @@ describe('serveOrcaApp', () => {
         '--serve',
         '--serve-json',
         '--serve-port',
-        '6768'
+        '6768',
+        ...HOST_SERVE_OZONE_SWITCHES
       ],
       expect.objectContaining({
         cwd: resolve(__dirname, '../../..')
       })
     )
+  })
+
+  it("re-applies a direct launch's --no-sandbox to the Electron it starts, not to terminals", () => {
+    process.env.ORCA_ELECTRON_NO_SANDBOX = '1'
+    try {
+      expect(getExecutableAppArgs('/opt/Orca/orca-ide')).toEqual(['--no-sandbox'])
+      expect(stripElectronRunAsNode(process.env)).not.toHaveProperty('ORCA_ELECTRON_NO_SANDBOX')
+    } finally {
+      delete process.env.ORCA_ELECTRON_NO_SANDBOX
+    }
   })
 
   it.each([
@@ -550,7 +579,7 @@ describe('serveOrcaApp', () => {
         )
         expect(spawnMock).toHaveBeenCalledWith(
           executable,
-          [...expectedPrefix, PIN_PROFILE, '--serve', '--serve-json'],
+          [...expectedPrefix, PIN_PROFILE, '--serve', '--serve-json', '--ozone-platform=x11'],
           // Foreground serve must share POSIX job-control signals with its CLI supervisor.
           expect.objectContaining({ detached: false })
         )
@@ -592,7 +621,8 @@ describe('serveOrcaApp', () => {
         'wss://sandbox.example.com',
         '--serve-recipe-json',
         '--serve-project-root',
-        '/workspace/repo'
+        '/workspace/repo',
+        ...HOST_SERVE_OZONE_SWITCHES
       ],
       expect.objectContaining({
         cwd: resolve(__dirname, '../../..'),

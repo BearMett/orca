@@ -179,6 +179,10 @@ export function buildWorkspaceSessionPatch(
     patch.clientHostedBrowserCloseIntentsByEnvironment =
       snapshot.clientHostedBrowserCloseIntentsByEnvironment
   }
+  if (changed.has('pairedTerminalTabCloseIntentsByEnvironment')) {
+    patch.pairedTerminalTabCloseIntentsByEnvironment =
+      snapshot.pairedTerminalTabCloseIntentsByEnvironment
+  }
   // Why openFiles: tab restorability reads the edit-mode files, so a file-only change must re-filter.
   if (
     editorFilesChanged ||
