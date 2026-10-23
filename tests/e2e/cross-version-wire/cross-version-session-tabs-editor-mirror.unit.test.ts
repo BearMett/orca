@@ -196,6 +196,7 @@ function makeSyncState(overrides: Partial<WebSessionTabsSyncState> = {}): WebSes
     browserCertificateFailuresByPageId: {},
     browserPagesByWorkspace: {},
     browserTabsByWorktree: {},
+    editorBuffers: {},
     groupsByWorktree: {},
     layoutByWorktree: {},
     openFiles: [],
