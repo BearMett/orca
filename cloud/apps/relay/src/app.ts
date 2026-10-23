@@ -37,8 +37,8 @@ import {
   type RelayAssignmentStore,
   type ResolvedRelayAssignment
 } from './assignment-store.js'
-import { ASSIGNMENT_LEASE_AUDIENCE, assignmentLeaseKeyId } from './assignment-lease.js'
-import { AssignmentRejectionLogWindow } from './assignment-rejection-log-window.js'
+import { ASSIGNMENT_LEASE_AUDIENCE, assignmentLeaseKeyId } from './assignment/assignment-lease.js'
+import { AssignmentRejectionLogWindow } from './assignment/assignment-rejection-log-window.js'
 import { CELL_ADMISSION_STATES } from './cell-admission-selector.js'
 import { registerCellSeatFeedRoute } from './cell-seat-feed-route.js'
 import { ReservePaceError, type ReserveAssignment, type ReservePlan } from './reserve-assignment.js'
@@ -462,12 +462,13 @@ export function createRelayApp(
         .sign(config.assignmentSigningKey)
     // Step 5: switched-on cells answer from the map; anything else keeps today's path below.
     let step5: Pick<AssignOptions, 'epochFloor' | 'placeFresh' | 'regionReserve'> = {}
-    if (operations.reservePlacement && !body.data.regionCorrection) {
+    if (operations.reservePlacement && body.data.regionCorrection?.action !== 'report') {
       let plan: ReservePlan
       try {
         plan = await operations.reservePlacement.plan(identity, {
           reconnect: Boolean(body.data.reconnect),
-          region: targetRegion
+          region: targetRegion,
+          regionCorrection: body.data.regionCorrection !== undefined
         })
       } catch (error) {
         if (!(error instanceof ReservePaceError)) throw error
@@ -2374,7 +2375,6 @@ function operationError(error: unknown): string {
   return error instanceof Error ? error.message : 'operation_failed'
 }
 
-export { relayHostLogDigest }
 
 // `suppressed` is present only on a window-closing line, and counts the rejections
 // that line stands for beyond the one already logged when the window opened.
