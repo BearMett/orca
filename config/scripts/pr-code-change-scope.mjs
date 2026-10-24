@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { CROSS_VERSION_STORAGE_AND_MIRROR_PREFIXES } from './pr-cross-version-wire-paths.mjs'
 import { isLayoutOracleSource } from './pr-layout-oracle-route.mjs'
 import {
   isCloudTestRunnerInput,
@@ -281,15 +282,7 @@ const CROSS_VERSION_WIRE_PREFIXES = [
   'src/renderer/src/runtime/paired-host-client-capabilities.ts',
   'src/shared/electron-remote-runtime-client-capabilities.ts',
   'src/shared/remote-runtime-client-capabilities.ts',
-  // An older app opening a newer orchestration database (orchestration-delivery-downgrade).
-  'src/main/runtime/orchestration/db.ts',
-  'src/main/runtime/orchestration/db/',
-  'src/main/runtime/orchestration/orchestration-schema-version-skew',
-  // Editor tabs a paired host publishes and an older peer mirrors (cross-version-session-tabs-editor-mirror).
-  'src/renderer/src/runtime/sync-runtime-graph/mobile-session-',
-  'src/renderer/src/runtime/web-session-tabs-sync/',
-  'src/shared/workspace-session-editor-schema',
-  'src/shared/workspace-session-salvage'
+  ...CROSS_VERSION_STORAGE_AND_MIRROR_PREFIXES
 ]
 
 const MANAGED_HOOK_PREFIXES = [
