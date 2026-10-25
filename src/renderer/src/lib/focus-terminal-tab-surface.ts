@@ -20,6 +20,9 @@ let pendingFocusFrameIds: number[] = []
 
 type FocusTerminalTabSurfaceOptions = {
   onlyIfFocusUnclaimed?: boolean
+  /** Rename return only: claim an idle chat composer now instead of queueing a replayable reveal request. */
+  oneShotChatComposerFocus?: boolean
+  shouldFocus?: () => boolean
   onImeRefocusSkipped?: (activeElement: Element | null) => void
   refreshImeContext?: boolean
 }
@@ -72,7 +75,10 @@ export function focusTerminalTabSurface(
       pendingFocusFrameIds = pendingFocusFrameIds.filter((frameId) => frameId !== secondFrameId)
       // Why: this can be queued before inline tab rename mounts. If it runs
       // afterward, focusing xterm blurs the rename input and commits it closed.
-      if (document.querySelector('[data-tab-rename-input="true"]')) {
+      if (
+        options.shouldFocus?.() === false ||
+        document.querySelector('[data-tab-rename-input="true"]')
+      ) {
         return
       }
       const escapedTabId = cssAttributeString(tabId)
@@ -83,6 +89,10 @@ export function focusTerminalTabSurface(
           !options.onlyIfFocusUnclaimed ||
           isTerminalFocusUnclaimed(document.activeElement, document)
         ) {
+          if (options.oneShotChatComposerFocus) {
+            requestNativeChatComposerFocus(tabId, { onlyIfFocusUnclaimed: true })
+            return
+          }
           requestNativeChatComposerFocus(tabId)
         }
         return

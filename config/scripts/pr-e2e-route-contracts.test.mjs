@@ -275,7 +275,7 @@ describe('ssh-browser-e2e-routing', () => {
     const run = job.steps.find(
       (step) => step.name === 'Run Docker SSH browser network route journeys'
     )
-    expect(job['runs-on']).toBe('ubuntu-latest')
+    expect(job['runs-on']).toBe('blacksmith-4vcpu-ubuntu-2404')
     expect(job.if).toContain("inputs.test_files == ''")
     expect(job.if).toContain(spec)
     expect(install.with['native-runtime']).toBe('node')
@@ -377,8 +377,7 @@ describe('orcad-e2e-routing', () => {
         'tests/e2e/helpers/orcad-convert-flow.ts',
         'tests/e2e/helpers/orcad-convert-host.ts'
       ],
-      ORCAD_IDLE_EXIT_E2E_SPEC,
-      ORCAD_OPEN_IN_OWNER_E2E_SPEC
+      ORCAD_IDLE_EXIT_E2E_SPEC
     )
   })
 
@@ -512,11 +511,15 @@ describe('managed-SSH remote sources routing', () => {
       'src/main/ipc/runtime-environments/runtime-environment-status-probe.ts',
       'src/main/ipc/runtime-environments/orcad-runtime-lifecycle-handlers.ts',
       'src/shared/protocol-version.ts',
-      'src/shared/remote-runtime-client-error-classification.ts',
+      'src/shared/remote-runtime/remote-runtime-client-error-classification.ts',
       // #30047 and #30060: sidebar sleep and project removal.
       'src/renderer/src/components/sidebar/sleep-worktree-flow.ts',
       'src/renderer/src/components/sidebar/ssh-host-remove-resolution.ts',
-      'src/renderer/src/store/repos/repo-removal.ts'
+      'src/renderer/src/store/repos/repo-removal.ts',
+      // #30775: the pane banner for a managed server that refused this desktop.
+      'src/renderer/src/components/terminal-pane/TerminalRemoteRuntimeReconnectBanner.tsx',
+      'src/renderer/src/components/terminal-pane/use-managed-pairing-refused.ts',
+      'src/renderer/src/components/terminal-pane/TerminalPaneRuntimePortals.tsx'
     ]) {
       expect(existsSync(join(projectDir, file)), file).toBe(true)
       expect(selectsManagedSshLane(file), file).toBe(true)

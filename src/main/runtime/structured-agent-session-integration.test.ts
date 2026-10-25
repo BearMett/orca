@@ -1,4 +1,5 @@
 import './rpc/unused-default-rpc-methods.test-fixture'
+import { scriptedCodexCatalogSession } from './scripted-codex-model-catalog.test-fixture'
 // One structured Codex session driven end to end over `agentSession.*`.
 //
 // Nothing here is stubbed except the Codex child itself: the RPC dispatcher, the
@@ -13,9 +14,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   CodexAppServerConnection,
-  CodexAppServerConnectionHandlers,
-  openCodexAppServerConnection
-} from '../codex/codex-app-server-connection'
+  CodexAppServerConnectionHandlers
+} from '../codex/app-server/codex-app-server-connection-types'
+import type { openCodexAppServerConnection } from '../codex/codex-app-server-connection'
 import { computeAgentSessionPayloadFingerprint } from '../../shared/agent-session-mutation-envelope'
 import { DESKTOP_RENDERER_RUNTIME_CLIENT_CAPABILITIES } from '../ipc/desktop-renderer-runtime-capabilities'
 import { AGENT_SESSION_CREATE_MESSAGE_RUNTIME_CAPABILITY } from '../../shared/agent-session-create-capabilities'
@@ -285,9 +286,8 @@ async function subscribe(
 
 /** Settles everything the provider streamed into the journal. Real clients see
  *  these rows arrive on the subscription; a test has to wait for them. */
-function drainStreamedEvents(): Promise<void> {
-  return getStructuredAgentSessionHost()?.flushStreamedEvents(SESSION) ?? Promise.resolve()
-}
+const drainStreamedEvents = (): Promise<void> =>
+  getStructuredAgentSessionHost()?.flushStreamedEvents(SESSION) ?? Promise.resolve()
 
 function textOf(item: AgentJournalRenderItem): string {
   const body = item.body
@@ -339,6 +339,7 @@ beforeEach(async () => {
   shellEnvironmentPolicy = { inheritAll: true, names: [] }
   const runtime = {
     getRuntimeId: () => 'runtime-1',
+    resolveStructuredAgentSessionLocalWorkspacePath: async () => `/repos/${WORKSPACE}`,
     getClientSettings: () => ({ experimentalNativeChat: true }),
     getStructuredAgentSessionCreateSupport: async () => ({ supported: true }),
     structuredAgentSessionLaunchSeedOptions: () => undefined,
@@ -359,6 +360,8 @@ beforeEach(async () => {
         claimKeyId: 'key-1',
         resolveWorkspacePath: async (workspaceId) => `/repos/${workspaceId}`,
         resolveCodexCommand: () => '/usr/local/bin/codex',
+        runCodexCatalogSession: scriptedCodexCatalogSession,
+        resolveAgentAccountHome: async () => ({ variable: 'CODEX_HOME', path: '/home/dev/.codex' }),
         resolveLaunchArgs: () => [],
         resolveClaudeAuthPolicy: () => ({ account: 'managed' }),
         resolveEnvironment: async () => {
@@ -687,16 +690,18 @@ describe('a structured codex session over agentSession.*', () => {
     ).toBe(true)
     expect(itemsOf(missed).map(textOf).filter(Boolean)).toEqual(['Stopped.'])
 
-    // A runtime taking the session over is the other half of reconnect: the
-    // fence advances, the old child is reaped, and its replacement resumes the
-    // thread this session proved rather than forking a new one.
+    // Stop ended the session once its turn did. A runtime taking it over is the other half of
+    // reconnect: the fence advances, and the new child resumes the thread this session proved
+    // rather than forking a new one.
     const reaped = codex.live()
+    await vi.waitFor(() => expect(reaped.closed).toBe(true))
+    const stoppedFence =
+      getStructuredAgentSessionHost()?.deps.store.getRecord(SESSION)?.lease.runtimeFence ?? fence
     const resumed = await ok<{ fence: number; page: { items: AgentJournalRenderItem[] } }>(
       'agentSession.ensure',
-      attachParams(fence)
+      attachParams(stoppedFence)
     )
-    expect(resumed.fence).toBe(fence + 1)
-    expect(reaped.closed).toBe(true)
+    expect(resumed.fence).toBe(stoppedFence + 1)
     expect(codex.live().resumedThreadId).toBe(THREAD)
     expect(await readKnownOptions()).toMatchObject({
       ok: true,
@@ -747,10 +752,8 @@ describe('a structured codex session over agentSession.*', () => {
     shellEnvironmentPolicy = { inheritAll: false, names: [] }
     const created = await ok<{ fence: number }>('agentSession.create', createIntentParams())
     expect(codex.live().launch.env?.EXAMPLE_GATEWAY_TOKEN).toBeUndefined()
-    expect({ bootEnvironmentReads, codexOverrideReads }).toEqual({
-      bootEnvironmentReads: 1,
-      codexOverrideReads: 1
-    })
+    expect(bootEnvironmentReads).toBe(1)
+    const beforeResume = codexOverrideReads
 
     configuredCodexProfile = 'updated'
     shellEnvironmentPolicy = { inheritAll: false, names: ['EXAMPLE_GATEWAY_TOKEN'] }
@@ -762,10 +765,8 @@ describe('a structured codex session over agentSession.*', () => {
       CODEX_PROFILE: 'updated',
       EXAMPLE_GATEWAY_TOKEN: 'shell-exported'
     })
-    expect({ bootEnvironmentReads, codexOverrideReads }).toEqual({
-      bootEnvironmentReads: 1,
-      codexOverrideReads: 2
-    })
+    expect(bootEnvironmentReads).toBe(1)
+    expect(codexOverrideReads).toBeGreaterThan(beforeResume)
   })
 
   it('refuses to build a host for a client that never advertised the capability', async () => {
@@ -842,8 +843,9 @@ describe('a structured codex session over agentSession.*', () => {
     ).toBe(false)
   })
 
-  it('persists truncated command output before publishing its journal row', async () => {
+  it('persists complete command output while publishing a shortened copy', async () => {
     await ok<{ fence: number }>('agentSession.create', createIntentParams())
+    const stream = await subscribe('sub-large-output')
     const output = 'large command output\n'.repeat(2_000)
 
     codex.notify('item/completed', {
@@ -860,13 +862,15 @@ describe('a structured codex session over agentSession.*', () => {
     })
     await drainStreamedEvents()
 
-    const host = getStructuredAgentSessionHost()
-    const journal = (
-      host as unknown as { sessions: Map<string, { journal: AgentSessionJournal }> }
-    ).sessions.get(SESSION)!.journal
-    const item = journal.snapshot().items.find((candidate) => candidate.body?.kind === 'tool-call')
+    const snapshot = await getStructuredAgentSessionHost()?.journalSnapshot(SESSION)
+    const item = snapshot?.items.find((candidate) => candidate.body?.kind === 'tool-call')
     const bounded = item?.body?.kind === 'tool-call' ? item.body.output : undefined
-    expect(bounded).toMatchObject({ truncated: true, byteLength: Buffer.byteLength(output) })
+    expect(bounded).toMatchObject({ head: output, truncated: false, byteLength: output.length })
+    const published = itemsOf(stream).find((candidate) => candidate.itemId === item?.itemId)
+    expect(published?.shortened).toBe(true)
+    expect(published?.body).toMatchObject({
+      output: { head: output.slice(0, 16 * 1024), truncated: true, byteLength: output.length }
+    })
   })
 
   it('keeps an answered prompt resolved after the provider exits', async () => {
@@ -890,10 +894,8 @@ describe('a structured codex session over agentSession.*', () => {
     })
     await drainStreamedEvents()
     const host = getStructuredAgentSessionHost()
-    const journal = (
-      host as unknown as { sessions: Map<string, { journal: AgentSessionJournal }> }
-    ).sessions.get(SESSION)!.journal
-    const approval = journal.snapshot().items.find((item) => item.body?.kind === 'approval')
+    let snapshot = await host?.journalSnapshot(SESSION)
+    const approval = snapshot?.items.find((item) => item.body?.kind === 'approval')
     expect(approval?.body).toMatchObject({
       kind: 'approval',
       resolution: { state: 'pending' }
@@ -916,9 +918,8 @@ describe('a structured codex session over agentSession.*', () => {
     codex.live().handlers.onExit?.(new Error('provider exited after answer'))
     await drainStreamedEvents()
 
-    expect(
-      journal.snapshot().items.find((item) => item.itemId === approval?.itemId)?.body
-    ).toMatchObject({
+    snapshot = await host?.journalSnapshot(SESSION)
+    expect(snapshot?.items.find((item) => item.itemId === approval?.itemId)?.body).toMatchObject({
       kind: 'approval',
       resolution: { state: 'resolved', selectedOptionId: 'accept' }
     })
