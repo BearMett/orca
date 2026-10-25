@@ -47,6 +47,8 @@ import {
   type AiVaultSessionListKeyboard
 } from './use-ai-vault-session-keyboard-navigation'
 import { useAiVaultPanelHandle, type AiVaultPanelProps } from './ai-vault-panel-handle'
+import { aiVaultSearchHitHostLabels } from './ai-vault-search-hit-hosts'
+import { selectFolderWorkspaces, selectWorktreesByRepo } from '@/store/workspace-record-selectors'
 
 export default function AiVaultPanel({
   ref,
@@ -69,10 +71,10 @@ export default function AiVaultPanel({
     useShallow((state) => ({
       projects: state.projects,
       settings: state.settings,
-      folderWorkspaces: state.folderWorkspaces,
+      folderWorkspaces: selectFolderWorkspaces(state),
       projectGroups: state.projectGroups,
       repos: state.repos,
-      worktreesByRepo: state.worktreesByRepo
+      worktreesByRepo: selectWorktreesByRepo(state)
     }))
   )
   const settings = useAppStore((s) => s.settings)
@@ -99,7 +101,6 @@ export default function AiVaultPanel({
     setAllAgentsEnabled,
     resetViewOptions
   } = usePersistedAiVaultViewOptions(initialAgents)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const { executionHostScope, onExecutionHostScopeChange, hostScopeOptions } =
     useAiVaultPanelHostScope(activeWorktreeId ?? null, resumeTargetState)
   const activeWorktreePath = activeWorktree?.path ?? null
@@ -121,9 +122,10 @@ export default function AiVaultPanel({
     [activeRepo, activeWorktree, allWorktrees, projectHostSetupProjection, repos]
   )
   const activeProjectKey = projectScopeContext.activeProjectKey
-  const { scope, handleScopeChange } = useAiVaultPanelScope({
+  const { scope, handleScopeChange, collapsedGroups, toggleGroup } = useAiVaultPanelScope({
     activeProjectKey,
-    activeWorktreePath
+    activeWorktreePath,
+    local: workspace !== undefined
   })
   const projectLabelByKey = projectScopeContext.projectLabelByKey
   // Sent to the scanner so scoped views surface sessions older than the global cap.
@@ -217,6 +219,10 @@ export default function AiVaultPanel({
     projectLabelByKey,
     hideEmptySessions
   })
+  const searchHitHostLabels = useMemo(
+    () => (searching ? aiVaultSearchHitHostLabels(filteredSessions, hostScopeOptions) : null),
+    [filteredSessions, hostScopeOptions, searching]
+  )
 
   const copyText = useCallback(async (text: string, label: string): Promise<void> => {
     await window.api.ui.writeClipboardText(text)
@@ -233,18 +239,6 @@ export default function AiVaultPanel({
     changeScope: handleScopeChange,
     setFocusSearchRequestId
   })
-
-  const toggleGroup = useCallback((key: string) => {
-    setCollapsedGroups((current) => {
-      const next = new Set(current)
-      if (next.has(key)) {
-        next.delete(key)
-      } else {
-        next.add(key)
-      }
-      return next
-    })
-  }, [])
 
   const requestDelete = useAiVaultSessionDeleteAction({
     refresh,
@@ -319,6 +313,7 @@ export default function AiVaultPanel({
           <AiVaultSessionVirtualList
             key={searching ? search.resetKey : 'history'}
             searchHits={searching ? searchHits : undefined}
+            searchHitHostLabels={searchHitHostLabels}
             groups={groups}
             collapsedGroups={collapsedGroups}
             loading={searching ? search.loading : loading}

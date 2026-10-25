@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
 import type { TuiAgent } from '../../../shared/tui-agent'
 import type { ExecutionHostId } from '../../../shared/execution-host'
+import { parseExecutionHostId } from '../../../shared/execution-host'
 import { translate } from '@/i18n/i18n'
 import { useAppStore } from '@/store'
 import { selectExecutionHostDisplayLabel } from '@/lib/execution-host-display-label'
@@ -25,10 +26,20 @@ import type { RuntimeClientTarget } from '../../../shared/runtime-client-target'
 import { toRuntimeWorktreeSelector } from '@/runtime/runtime-worktree-selector'
 import { readStructuredChatHostPermissionVerdict } from '@/runtime/structured-chat-host-permission'
 import { notifyHostPermissionRefused } from '@/lib/structured-agent-session-launch-permission-notice'
+import { readAgentInventoryForTarget } from '@/lib/agent-detection-target-inventory'
+import { structuredChatUnavailableText } from '@/lib/structured-agent-session-launch-failure'
+import type { WebRuntimeTerminalCreateOutcome } from '@/runtime/web-runtime-session-types'
+
+export type AgentTerminalLaunchCompletion = {
+  outcome: WebRuntimeTerminalCreateOutcome
+  tabId?: string
+}
 
 /** What a host's "no" opens instead: the terminal the launch would have opened had it known. */
 export type StructuredLaunchTerminal = {
   opened: boolean
+  tabId?: string
+  completion?: Promise<AgentTerminalLaunchCompletion>
   promptDeliveryResult?: Promise<StructuredPromptDeliveryResult>
 }
 
@@ -62,27 +73,11 @@ function notifyExplicitChatFailure(agent: TuiAgent, reason?: string): void {
       "Couldn't start a {{value0}} chat.",
       { value0: structuredAgentLabel(agent) }
     ),
-    {
-      description:
-        reason === 'wsl'
-          ? translate(
-              'components.native-chat.explicitChatWsl',
-              'Chat is not available in WSL. Open the agent in a terminal instead.'
-            )
-          : reason === 'remote'
-            ? translate(
-                'components.native-chat.explicitChatSsh',
-                'Chat is not available over SSH. Open the agent in a terminal instead.'
-              )
-            : translate(
-                'components.native-chat.explicitChatUnavailable',
-                'This workspace cannot run the chat. Check the agent installation or open it in a terminal.'
-              )
-    }
+    { description: structuredChatUnavailableText(reason) }
   )
 }
 
-function notifyHostDeclined(agent: TuiAgent): void {
+export function notifyHostDeclined(agent: TuiAgent, explain = true): void {
   const agentLabel = structuredAgentLabel(agent)
   toast.info(
     translate(
@@ -90,13 +85,15 @@ function notifyHostDeclined(agent: TuiAgent): void {
       'Opened {{value0}} in a terminal',
       { value0: agentLabel }
     ),
-    {
-      description: translate(
-        'components.native-chat.structuredSessionHostDeclinedDescription',
-        "This server can't run a {{value0}} chat in this workspace.",
-        { value0: agentLabel }
-      )
-    }
+    explain
+      ? {
+          description: translate(
+            'components.native-chat.structuredSessionHostDeclinedDescription',
+            "This workspace can't run a {{value0}} chat.",
+            { value0: agentLabel }
+          )
+        }
+      : undefined
   )
 }
 
@@ -123,7 +120,7 @@ function notifyHostUnreachable(agent: TuiAgent, executionHostId: ExecutionHostId
 /** What the caller's own terminal launch would have carried beyond the plan's agent and prompt. */
 export type DeclinedStructuredLaunchTerminalOptions = Pick<
   LaunchAgentInNewTabArgs,
-  'agentArgs' | 'launchPlatform' | 'launchSource' | 'initialCwd'
+  'agentArgs' | 'launchPlatform' | 'launchSource' | 'initialCwd' | 'activate'
 >
 
 /** A caller with no terminal path of its own gets the one a new agent tab would open. */
@@ -140,7 +137,7 @@ export async function openDeclinedStructuredLaunchTerminal(args: {
     agent: args.plan.agent,
     worktreeId: args.worktreeId,
     ...(args.targetGroupId ? { groupId: args.targetGroupId } : {}),
-    ...(args.plan.prompt ? { prompt: args.plan.prompt } : {}),
+    ...(args.terminal?.activate !== false && args.plan.prompt ? { prompt: args.plan.prompt } : {}),
     ...(args.plan.promptDelivery ? { promptDelivery: args.plan.promptDelivery } : {}),
     ...(args.plan.onPromptDelivered ? { onPromptDelivered: args.plan.onPromptDelivered } : {}),
     ...(args.plan.promptKeptByCaller ? { promptKeptByCaller: true as const } : {}),
@@ -153,8 +150,32 @@ export async function openDeclinedStructuredLaunchTerminal(args: {
   })
   return {
     opened: result !== null,
+    ...(result?.surface.kind === 'local-terminal' ? { tabId: result.surface.tabId } : {}),
+    ...(result?.terminalCompletion ? { completion: result.terminalCompletion } : {}),
     ...(result?.promptDeliveryResult ? { promptDeliveryResult: result.promptDeliveryResult } : {})
   }
+}
+
+/** A declined chat falls back to its agent's terminal only where that CLI may be installed. */
+export function declinedTerminalCanOpen(
+  agent: TuiAgent,
+  worktreeId: string,
+  host: ExecutionHostId,
+  opensCallerSurface?: true
+): boolean {
+  if (opensCallerSurface) {
+    return true
+  }
+  const parsed = parseExecutionHostId(host)
+  const inventory = readAgentInventoryForTarget(
+    useAppStore.getState(),
+    parsed?.kind === 'ssh'
+      ? { kind: 'ssh', connectionId: parsed.targetId }
+      : parsed?.kind === 'runtime'
+        ? { kind: 'runtime', environmentId: parsed.environmentId, worktreeId }
+        : { kind: 'local', worktreeId }
+  )
+  return inventory.state !== 'successful' || inventory.ids?.includes(agent) !== false
 }
 
 /**
@@ -177,6 +198,8 @@ export function beginHostAdmittedStructuredLaunch(args: {
   onHostDeclined: (
     target: RuntimeClientTarget
   ) => Promise<StructuredLaunchTerminal> | StructuredLaunchTerminal
+  /** `onHostDeclined` opens the caller's own surface (a shell), never the agent's CLI. */
+  declinedOpensCallerSurface?: true
 }): HostAdmittedStructuredLaunch {
   const { plan } = args
   const paired = args.target.kind === 'environment'
@@ -190,8 +213,14 @@ export function beginHostAdmittedStructuredLaunch(args: {
         resolveDelivery = resolve
       })
     : undefined
-  const failBeforeSurface = (error: unknown, reason?: string): StructuredAgentLaunchSettlement => {
-    if (plan.requestedSurface === 'chat' && !admitted) {
+  // Notifies for an explicit chat that carries a prompt (one without opens before its host answers,
+  // and its chat says why) or a default agent with no CLI to fall back to.
+  const failBeforeSurface = (
+    error: unknown,
+    reason?: string,
+    notify = plan.requestedSurface === 'chat'
+  ): StructuredAgentLaunchSettlement => {
+    if (notify && !admitted) {
       notifyExplicitChatFailure(plan.agent, reason)
       resolveDelivery(NOT_DELIVERED_NOTIFIED)
       return { kind: 'failed', error, notified: true }
@@ -230,10 +259,17 @@ export function beginHostAdmittedStructuredLaunch(args: {
         }
       }
       if (admission.kind === 'declined') {
-        if (plan.resumeFrom || plan.requestedSurface === 'chat') {
+        const noCli = !declinedTerminalCanOpen(
+          plan.agent,
+          args.worktreeId,
+          args.executionHostId,
+          args.declinedOpensCallerSurface
+        )
+        if (plan.resumeFrom || plan.requestedSurface === 'chat' || noCli) {
           return failBeforeSurface(
             new StructuredAgentSessionCreateRefusalError('structured_agent_session_unsupported'),
-            admission.reason
+            admission.reason,
+            plan.requestedSurface === 'chat' || noCli
           )
         }
         const terminal = await args.onHostDeclined(args.target)

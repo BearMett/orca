@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as NodeSqlite from 'node:sqlite'
 import type * as ChromiumCookieSnapshotModule from './chromium-cookie-snapshot'
-import type { DetectedBrowser } from './browser-cookie-detection-types'
+import type { DetectedBrowser } from './cookies/sources/browser-cookie-detection-types'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -95,7 +95,7 @@ vi.mock('./browser-cookie-clear-store', () => ({
   })
 }))
 
-import { importChromiumCookies } from './browser-cookie-chromium-import'
+import { importChromiumCookies } from './cookies/chromium/import-cookies'
 import { createChromiumCookieTestDatabase } from './browser-cookie-import-test-database'
 import { DatabaseSync } from 'node:sqlite'
 

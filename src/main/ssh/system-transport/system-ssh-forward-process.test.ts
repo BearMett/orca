@@ -1,18 +1,28 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
-const { existsSyncMock, spawnMock, connectMock, createServerMock, stopOrphanMock } = vi.hoisted(
-  () => ({
-    existsSyncMock: vi.fn(),
-    spawnMock: vi.fn(),
-    connectMock: vi.fn(),
-    createServerMock: vi.fn(),
-    stopOrphanMock: vi.fn()
-  })
-)
+const {
+  existsSyncMock,
+  spawnMock,
+  connectMock,
+  createServerMock,
+  stopOrphanMock,
+  cancelMuxedMock
+} = vi.hoisted(() => ({
+  existsSyncMock: vi.fn(),
+  spawnMock: vi.fn(),
+  connectMock: vi.fn(),
+  createServerMock: vi.fn(),
+  stopOrphanMock: vi.fn(),
+  cancelMuxedMock: vi.fn()
+}))
 
 vi.mock('./system-ssh-orphaned-forward', () => ({
   stopOrphanedOrcaSshForward: stopOrphanMock
+}))
+
+vi.mock('./system-ssh-muxed-forward-cancel', () => ({
+  cancelMuxedLocalForward: cancelMuxedMock
 }))
 
 vi.mock('fs', async (importOriginal) => {
@@ -122,6 +132,7 @@ describe('system SSH forward process', () => {
     connectMock.mockReset()
     createServerMock.mockReset().mockImplementation(createFakeServer)
     stopOrphanMock.mockReset().mockResolvedValue(false)
+    cancelMuxedMock.mockReset().mockResolvedValue(false)
     mockSystemSshExists()
   })
 
@@ -290,6 +301,8 @@ describe('system SSH forward process', () => {
       startSystemSshPortForwardProcess(createTarget(), 5173, '127.0.0.1', 3000)
     ).rejects.toThrow('Local port 127.0.0.1:5173 is not available')
     expect(stopOrphanMock).toHaveBeenCalledWith(5173, expect.any(Array))
+    // Why: any fixed-port forward reaches here, and the master's forward may be the user's own.
+    expect(cancelMuxedMock).not.toHaveBeenCalled()
     expect(spawnMock).not.toHaveBeenCalled()
   })
 
@@ -427,6 +440,52 @@ describe('system SSH forward process', () => {
     await vi.advanceTimersByTimeAsync(SYSTEM_SSH_FORWARD_STARTUP_GRACE_MS)
 
     await expect(pending).resolves.toBeUndefined()
+  })
+
+  // Why: a slow ProxyCommand outlasts the grace period, and a caller that dials the port next needs it listening.
+  it('waits past the grace period for a listener when a listener timeout is given', async () => {
+    vi.useFakeTimers()
+    const child = createFakeProcess()
+    let listening = false
+    connectMock.mockImplementation(() => {
+      const socket = createFakeSocket()
+      queueMicrotask(() =>
+        listening ? socket.emit('connect') : socket.emit('error', new Error('ECONNREFUSED'))
+      )
+      return socket
+    })
+
+    spawnMock.mockReturnValue(child)
+    const forward = await startSystemSshPortForwardProcess(createTarget(), 5173, '127.0.0.1', 3000)
+
+    let settled = false
+    const pending = waitForSystemSshForwardStartup(forward.process, 5173, 30_000).finally(() => {
+      settled = true
+    })
+    await vi.advanceTimersByTimeAsync(SYSTEM_SSH_FORWARD_STARTUP_GRACE_MS * 4)
+    expect(settled).toBe(false)
+
+    listening = true
+    await vi.advanceTimersByTimeAsync(SYSTEM_SSH_FORWARD_LISTENER_PROBE_INTERVAL_MS * 2)
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('rejects when no listener appears within the listener timeout', async () => {
+    vi.useFakeTimers()
+    const child = createFakeProcess()
+    connectMock.mockImplementation(() => {
+      const socket = createFakeSocket()
+      queueMicrotask(() => socket.emit('error', new Error('ECONNREFUSED')))
+      return socket
+    })
+
+    spawnMock.mockReturnValue(child)
+    const forward = await startSystemSshPortForwardProcess(createTarget(), 5173, '127.0.0.1', 3000)
+
+    const pending = waitForSystemSshForwardStartup(forward.process, 5173, 5_000)
+    const assertion = expect(pending).rejects.toThrow('did not listen on 127.0.0.1:5173')
+    await vi.advanceTimersByTimeAsync(5_000)
+    await assertion
   })
 
   it('sends SIGTERM then SIGKILL when the process does not exit', async () => {

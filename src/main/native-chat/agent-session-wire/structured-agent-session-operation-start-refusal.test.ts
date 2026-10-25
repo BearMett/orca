@@ -1,6 +1,3 @@
-// What an operation that needs the agent is told when it cannot have one: a typed refusal in
-// words a person can read, never Orca's own error text.
-
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentSessionRecord } from '../../../shared/agent-session-record'
 import type { StructuredAgentSessionAttachContext } from './structured-agent-session-attach-context'
@@ -51,18 +48,19 @@ describe('an operation whose agent start throws', () => {
 
 describe('an option picked while the chat is at rest', () => {
   it('refuses a key the provider would not accept as a rejected option', async () => {
-    const persistOptions = vi.fn(async () => {})
+    const reviseSessionOptions = vi.fn()
     const refused = await recordStructuredAgentSessionOptionIntent(
       {
         store: {
           getRecord: () =>
             // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the intent reads only the record's provider and options.
             ({ provider: 'codex', options: {} }) as unknown as AgentSessionRecord,
-          replaceSessionOptions: vi.fn()
+          replaceSessionOptions: vi.fn(),
+          reviseSessionOptions
         },
         agents: claudeAndCodexAgents()
       },
-      { sessionId: SESSION, fence: 1, persistOptions, publish: () => {}, now: () => 0 },
+      { sessionId: SESSION, fence: 1, publish: () => {}, now: () => 0 },
       { key: 'notAnOption', value: 'x' }
     )
 
@@ -73,6 +71,6 @@ describe('an option picked while the chat is at rest', () => {
         details: { reason: 'optionRejected' }
       }
     })
-    expect(persistOptions).not.toHaveBeenCalled()
+    expect(reviseSessionOptions).not.toHaveBeenCalled()
   })
 })
